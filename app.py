@@ -8,13 +8,22 @@ import pandas as pd
 import streamlit as st
 
 from llm_client import PROVIDERS, chat_completion, test_connection
-from radar_core import CandidateProfile, ROLE_ORDER, analyze_jd, build_resume_prompt
+from radar_core import CandidateProfile, ROLE_DESCRIPTIONS, ROLE_ORDER, analyze_jd, build_resume_prompt
 from resume_parser import parse_resume
 from storage import UserStore
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
 DEMO_JOB_ID = "EXT026"
+DEMO_RESUME = """教育背景
+首都经济贸易大学 | 经济统计学 | 本科 | 2028届
+
+技能
+Python、SQL、Excel、R、Stata、FineBI、数据清洗、数据可视化、Prompt、RAG、知识库、Agent、Bad Case、PRD
+
+项目摘要（演示用匿名资料）
+参与 AI 岗位诊断项目，整理多平台 JD，建立硬约束标注标准，分析 Bad Case 并输出复盘报告。
+""".strip()
 ROLE_CHART_LABELS = {
     "AI产品与Agent产品": "AI产品/Agent",
     "大模型评测、训练与数据质量": "大模型评测/训练",
@@ -143,6 +152,27 @@ def sync_profile_field(state_key: str) -> None:
     st.session_state[state_key] = st.session_state[PROFILE_WIDGET_KEYS[state_key]]
 
 
+def apply_resume_snapshot(snapshot) -> list[str]:
+    updated = []
+    field_values = {
+        "profile_school": snapshot.school,
+        "profile_major": snapshot.major,
+        "profile_degree": snapshot.degree,
+        "profile_graduation_year": snapshot.graduation_year,
+        "profile_skills": "、".join(snapshot.skills or []),
+    }
+    labels = {
+        "profile_school": "学校", "profile_major": "专业", "profile_degree": "学历",
+        "profile_graduation_year": "毕业年份", "profile_skills": "技能",
+    }
+    for state_key, value in field_values.items():
+        if value not in {None, ""}:
+            st.session_state[state_key] = value
+            updated.append(labels[state_key])
+    st.session_state._reset_profile_widgets = True
+    return updated
+
+
 def persist_account_state(force: bool = False) -> None:
     user_id = st.session_state.get("auth_user_id")
     if not user_id:
@@ -175,6 +205,44 @@ def start_guest_session() -> None:
     st.session_state.auth_user_id = None
     st.session_state.auth_username = "游客"
     st.session_state._account_loaded_for = "guest"
+    st.rerun()
+
+
+def start_demo_session() -> None:
+    for key in list(st.session_state):
+        del st.session_state[key]
+    for state_key, default_value in PROFILE_DEFAULTS.items():
+        st.session_state[state_key] = list(default_value) if isinstance(default_value, list) else default_value
+    demo_profile = CandidateProfile()
+    st.session_state.update({
+        "profile_school": demo_profile.school,
+        "profile_school_tier": demo_profile.school_tier,
+        "profile_major": demo_profile.major,
+        "profile_degree": demo_profile.degree,
+        "profile_graduation_year": demo_profile.graduation_year,
+        "profile_available_days": demo_profile.available_days,
+        "profile_max_months": demo_profile.max_months,
+        "profile_skills": demo_profile.skills,
+        "resume_text": DEMO_RESUME,
+        "resume_name": "示例简历（匿名）.txt",
+        "auth_mode": "demo",
+        "auth_user_id": None,
+        "auth_username": "示例访客",
+        "_account_loaded_for": "demo",
+        "nav_page": "示例 Demo",
+    })
+    for draft_key, saved_key in {
+        "api_provider_draft": "api_provider", "api_base_url_draft": "api_base_url",
+        "api_model_draft": "api_model", "api_key_draft": "api_key",
+    }.items():
+        st.session_state[draft_key] = st.session_state[saved_key]
+    demo_job = next(record for record in load_jsonl("external_jd_v1.jsonl") if record["job_id"] == DEMO_JOB_ID)
+    st.session_state["jd_input"] = demo_job["jd_raw"]
+    st.session_state["analysis"] = analyze_jd(demo_job["jd_raw"], demo_profile, DEMO_RESUME)
+    st.session_state["analysis_jd"] = demo_job["jd_raw"]
+    st.session_state["analysis_resume"] = DEMO_RESUME
+    st.session_state["analysis_profile"] = demo_profile
+    st.session_state["analysis_mode"] = "demo"
     st.rerun()
 
 
@@ -279,6 +347,68 @@ def save_user_job(jd_text: str, analysis: dict) -> str:
     return record_id
 
 
+def render_analysis_report(
+    jd_text: str,
+    analysis_profile: CandidateProfile,
+    analysis: dict,
+    analysis_resume: str,
+    record_note: str,
+    allow_api: bool = True,
+) -> None:
+    st.markdown(f'<div class="decision"><div class="label">投递建议</div><div class="value {status_class(analysis["decision"])}">{analysis["decision"]}</div><div>{analysis["company"]} · {analysis["role_title"]} · {analysis["role_family"]}</div></div>', unsafe_allow_html=True)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("综合适配度", f"{analysis['fit_score']} / 100")
+    m2.metric("每周要求", analysis["schedule"]["weekly_days"] or "未提及")
+    m3.metric("最低周期", analysis["schedule"]["minimum_months"] or "未提及")
+    m4.metric("识别技能", len(analysis["jd_skills"]))
+    st.caption(record_note)
+    hard, fit = st.columns([1, 1])
+    with hard:
+        st.subheader("硬约束")
+        for constraint in analysis["constraints"]:
+            render_constraint(constraint)
+    with fit:
+        st.subheader("能力与经历")
+        st.write("**已匹配**")
+        st.write("、".join(analysis["matched_skills"]) or "上传简历后才能进行可靠匹配")
+        st.write("**JD要求但简历中暂未识别**")
+        st.write("、".join(analysis["missing_skills"]) or "没有识别到明确技能缺口")
+        st.write("**主要风险**")
+        for risk in analysis["risks"] or ["暂未识别明显风险"]:
+            st.write(f"- {risk}")
+    st.subheader("核心交付物")
+    for item in analysis["deliverables"] or ["未能从 JD 中提取明确交付物，建议人工复核职责段落。"]:
+        st.write(f"- {item}")
+    st.subheader("建议动作")
+    for index, action in enumerate(analysis["next_actions"], 1):
+        st.write(f"{index}. {action}")
+    prompt = build_resume_prompt(jd_text, analysis_profile, analysis_resume, analysis)
+    st.subheader("简历修改提示词")
+    st.caption("可直接复制；已包含硬约束、JD、个人画像和防止虚构的要求。")
+    st.code(prompt, language="text", line_numbers=False)
+    if not allow_api:
+        return
+    with st.expander("使用我的 API 生成深度建议"):
+        api_ready = st.session_state.api_config_status == "connected"
+        if api_ready:
+            st.success(f"模型可以调用：{st.session_state.api_provider} / {st.session_state.api_model}")
+        elif st.session_state.api_config_status == "saved":
+            st.warning("API 已保存但尚未测试，请先到“我的资料”点击“保存并测试连接”。")
+        elif st.session_state.api_config_status == "failed":
+            st.error(f"API 连接失败：{st.session_state.api_status_message}")
+        else:
+            st.warning("尚未配置 API，请先到“我的资料”粘贴 Key 并测试连接。")
+        st.caption("请求会把当前 JD 和简历文本发送给你选择的模型服务商。")
+        if st.button("生成深度分析与改写", width="content", disabled=not api_ready):
+            try:
+                with st.spinner("正在分析岗位与简历……"):
+                    st.session_state["llm_result"] = chat_completion(st.session_state.api_key, st.session_state.api_base_url, st.session_state.api_model, prompt)
+            except Exception as error:
+                st.error(str(error))
+        if st.session_state.get("llm_result"):
+            st.markdown(st.session_state["llm_result"])
+
+
 st.set_page_config(page_title="AI 实习雷达", page_icon="◎", layout="wide", initial_sidebar_state="expanded")
 st.markdown("""
 <style>
@@ -333,9 +463,15 @@ if os.getenv("AI_RADAR_TEST_BYPASS_AUTH") == "1" and not st.session_state.get("a
 if not st.session_state.get("auth_mode"):
     st.title("AI 实习雷达")
     st.markdown('<div class="caption">登录后，你的求职画像、简历、API 配置和岗位记录会自动恢复。</div>', unsafe_allow_html=True)
-    if st.button("游客体验", width="stretch"):
-        start_guest_session()
-    st.caption("游客无需注册；填写的画像、简历、API Key 和岗位记录仅保留在当前会话，退出后清除。")
+    guest_entry, demo_entry = st.columns(2)
+    with guest_entry:
+        if st.button("游客体验", width="stretch"):
+            start_guest_session()
+        st.caption("从空白资料开始，退出后清除本次数据。")
+    with demo_entry:
+        if st.button("查看完整 Demo", type="primary", width="stretch"):
+            start_demo_session()
+        st.caption("预填画像、简历和真实 JD，直接查看完整诊断。")
     login_tab, register_tab = st.tabs(["登录", "注册"])
     with login_tab:
         with st.form("login_form"):
@@ -382,11 +518,18 @@ report = load_json("external_eval_v1.json")
 with st.sidebar:
     st.markdown("### AI 实习雷达")
     st.caption("先判断能不能投，再决定怎么投")
-    account_label = f"账户：{st.session_state.auth_username}" if st.session_state.auth_mode == "account" else "游客模式 · 数据不会保存"
+    account_label = (
+        f"账户：{st.session_state.auth_username}" if st.session_state.auth_mode == "account"
+        else "完整 Demo · 内容已预填" if st.session_state.auth_mode == "demo"
+        else "游客模式 · 数据不会保存"
+    )
     st.caption(account_label)
     if st.button("退出登录", key="logout_button", width="stretch"):
         sign_out()
-    page = st.radio("导航", ["求职首页", "我的资料", "智能诊断", "岗位库", "更多"], label_visibility="collapsed")
+    nav_options = ["求职首页", "我的资料", "智能诊断", "岗位库", "更多"]
+    if st.session_state.auth_mode == "demo":
+        nav_options.insert(0, "示例 Demo")
+    page = st.radio("导航", nav_options, label_visibility="collapsed", key="nav_page")
     st.divider()
     st.caption("我的求职画像")
     st.write(st.session_state.profile_school or "学校未填写")
@@ -402,7 +545,38 @@ profile = current_profile()
 profile_ready = profile_is_complete()
 catalog_df, catalog_details = build_catalog(profile, st.session_state.resume_text, st.session_state.user_jobs) if profile_ready else (pd.DataFrame(columns=CATALOG_COLUMNS), {})
 
-if page == "求职首页":
+if page == "示例 Demo":
+    st.title("一份完整诊断是怎样的")
+    st.markdown('<div class="caption">已预填示例求职画像、匿名简历和一条真实 JD；你无需填写任何内容。</div>', unsafe_allow_html=True)
+    st.info("这是独立演示环境，不会保存账户、简历或岗位记录。完整体验后，可退出并注册自己的账户。")
+    d1, d2 = st.columns([1, 1])
+    with d1:
+        st.subheader("已预填的求职画像")
+        st.write(f"**学校与专业**：{profile.school}（{profile.school_tier}）· {profile.major}")
+        st.write(f"**学历与毕业**：{profile.degree} · {profile.graduation_year}届")
+        st.write(f"**实习时间**：每周最多{profile.available_days}天 · 最长{profile.max_months}个月")
+        st.write(f"**技能**：{profile.skills}")
+    with d2:
+        st.subheader("已预填的资料")
+        st.write(f"**简历**：{st.session_state.resume_name}")
+        st.write(f"**目标岗位**：{st.session_state.analysis['company']} · {st.session_state.analysis['role_title']}")
+        st.write("**大模型 API**：Demo 不需要配置，核心诊断由本地规则直接生成。")
+        st.write("**报告包含**：硬约束、适配度、技能缺口、核心交付物、行动建议和简历修改提示词。")
+        with st.expander("查看示例简历文本"):
+            st.text(st.session_state.resume_text)
+    with st.expander("查看真实 JD 原文"):
+        st.text(st.session_state.analysis_jd)
+    st.divider()
+    render_analysis_report(
+        st.session_state.analysis_jd,
+        st.session_state.analysis_profile,
+        st.session_state.analysis,
+        st.session_state.analysis_resume,
+        "当前为独立示例 Demo，不会写入岗位库。",
+        allow_api=False,
+    )
+
+elif page == "求职首页":
     st.title("今天先投什么")
     if profile_ready:
         st.markdown(f'<div class="caption">{profile.school} · {profile.major} · {profile.graduation_year}届 · 每周最多{profile.available_days}天 · 最长{profile.max_months}个月</div>', unsafe_allow_html=True)
@@ -465,23 +639,25 @@ elif page == "我的资料":
             else "简历仅用于提取求职画像、匹配 JD 和生成改写建议。游客模式不保存原文件或解析文本，退出后即清除。"
         )
         st.caption(resume_privacy)
-        resume_file = st.file_uploader("上传 DOCX、PDF 或 TXT", type=["docx", "pdf", "txt"], help="支持 DOCX、PDF 和纯文本简历。")
+        st.info("上传简历后，系统会自动提取并回填学校、专业、学历、毕业年份和技能；不上传也可以在左侧手动填写。学校层次和实习时间需由本人确认。")
+        resume_file = st.file_uploader("上传 DOCX、PDF 或 TXT", type=["docx", "pdf", "txt"], help="支持 DOCX、PDF 和纯文本简历；上传后自动生成可编辑的求职画像。")
         if resume_file:
             try:
-                snapshot = parse_resume(resume_file)
-                st.session_state.resume_text = snapshot.text
-                st.session_state.resume_name = resume_file.name
-                st.success(f"已解析：{snapshot.school or '学校待识别'} · {snapshot.major or '专业待识别'} · {len(snapshot.skills or [])} 项技能")
-                st.write({"学校": snapshot.school, "专业": snapshot.major, "学历": snapshot.degree, "毕业年份": snapshot.graduation_year, "技能": snapshot.skills})
-                if st.button("用简历识别结果更新画像"):
-                    if snapshot.school: st.session_state.profile_school = snapshot.school
-                    if snapshot.major: st.session_state.profile_major = snapshot.major
-                    if snapshot.degree: st.session_state.profile_degree = snapshot.degree
-                    if snapshot.graduation_year: st.session_state.profile_graduation_year = snapshot.graduation_year
-                    if snapshot.skills: st.session_state.profile_skills = "、".join(snapshot.skills)
+                upload_id = sha256(resume_file.name.encode("utf-8") + resume_file.getvalue()).hexdigest()
+                if st.session_state.get("_processed_resume_upload") != upload_id:
+                    snapshot = parse_resume(resume_file)
+                    st.session_state.resume_text = snapshot.text
+                    st.session_state.resume_name = resume_file.name
+                    updated_fields = apply_resume_snapshot(snapshot)
+                    st.session_state._processed_resume_upload = upload_id
+                    st.session_state.resume_parse_message = (
+                        f"已自动回填：{'、'.join(updated_fields)}。" if updated_fields
+                        else "已读取简历文本，但未稳定识别到画像字段，请手动补充。"
+                    )
                     persist_account_state(force=True)
-                    st.session_state._reset_profile_widgets = True
                     st.rerun()
+                st.success(f"当前简历：{st.session_state.resume_name}")
+                st.caption(st.session_state.get("resume_parse_message", "简历已解析并更新求职画像。"))
             except Exception as error:
                 st.error(str(error))
         elif st.session_state.resume_text:
@@ -583,26 +759,6 @@ elif page == "我的资料":
 elif page == "智能诊断":
     st.title("智能诊断")
     st.markdown('<div class="caption">直接粘贴完整 JD，岗位名称、时间和资格限制由系统自动提取</div>', unsafe_allow_html=True)
-    demo_job = next(record for record in load_jsonl("external_jd_v1.jsonl") if record["job_id"] == DEMO_JOB_ID)
-    demo_info, demo_action = st.columns([2.4, 1])
-    with demo_info:
-        st.markdown("**示例 Demo**")
-        demo_profile_note = "当前求职画像" if profile_ready else "示例求职画像（首都经济贸易大学·经济统计学·2028届）"
-        st.caption(f"真实岗位样本：{demo_job['company']} · {demo_job['role_title']}；使用{demo_profile_note}，不写入岗位库。")
-    with demo_action:
-        run_demo = st.button("一键运行完整示例", width="stretch")
-    if run_demo:
-        demo_profile = profile if profile_ready else CandidateProfile()
-        demo_resume = st.session_state.resume_text if profile_ready else ""
-        st.session_state["jd_input"] = demo_job["jd_raw"]
-        st.session_state["analysis"] = analyze_jd(demo_job["jd_raw"], demo_profile, demo_resume)
-        st.session_state["analysis_jd"] = demo_job["jd_raw"]
-        st.session_state["analysis_resume"] = demo_resume
-        st.session_state["analysis_profile"] = demo_profile
-        st.session_state["analysis_mode"] = "demo"
-        st.session_state.pop("saved_record_id", None)
-        st.session_state.pop("llm_result", None)
-    st.divider()
     left, right = st.columns([1.35, 1])
     with left:
         jd_text = st.text_area("完整 JD", height=340, placeholder="把招聘网站上的岗位信息完整粘贴到这里，包括岗位名称、职责和任职要求……", key="jd_input")
@@ -632,70 +788,27 @@ elif page == "智能诊断":
             st.session_state["saved_record_id"] = save_user_job(jd_text, st.session_state["analysis"])
     analysis = st.session_state.get("analysis")
     if analysis and st.session_state.get("analysis_jd") == jd_text:
-        st.markdown(f'<div class="decision"><div class="label">投递建议</div><div class="value {status_class(analysis["decision"])}">{analysis["decision"]}</div><div>{analysis["company"]} · {analysis["role_title"]} · {analysis["role_family"]}</div></div>', unsafe_allow_html=True)
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("综合适配度", f"{analysis['fit_score']} / 100")
-        m2.metric("每周要求", analysis["schedule"]["weekly_days"] or "未提及")
-        m3.metric("最低周期", analysis["schedule"]["minimum_months"] or "未提及")
-        m4.metric("识别技能", len(analysis["jd_skills"]))
-        if st.session_state.get("analysis_mode") == "demo":
-            st.caption("当前为示例 Demo，不会写入你的岗位库。")
-        else:
-            save_scope = "已保存到你的岗位库" if st.session_state.auth_mode == "account" else "已加入本次访问的临时岗位库"
-            st.caption(f"{save_scope}：{st.session_state.get('saved_record_id', '')}")
-        hard, fit = st.columns([1, 1])
-        with hard:
-            st.subheader("硬约束")
-            for constraint in analysis["constraints"]:
-                render_constraint(constraint)
-        with fit:
-            st.subheader("能力与经历")
-            st.write("**已匹配**")
-            st.write("、".join(analysis["matched_skills"]) or "上传简历后才能进行可靠匹配")
-            st.write("**JD要求但简历中暂未识别**")
-            st.write("、".join(analysis["missing_skills"]) or "没有识别到明确技能缺口")
-            st.write("**主要风险**")
-            for risk in analysis["risks"] or ["暂未识别明显风险"]:
-                st.write(f"- {risk}")
-        st.subheader("核心交付物")
-        for item in analysis["deliverables"] or ["未能从 JD 中提取明确交付物，建议人工复核职责段落。"]:
-            st.write(f"- {item}")
-        st.subheader("建议动作")
-        for index, action in enumerate(analysis["next_actions"], 1):
-            st.write(f"{index}. {action}")
         analysis_profile = st.session_state.get("analysis_profile", profile)
-        prompt = build_resume_prompt(jd_text, analysis_profile, st.session_state.get("analysis_resume", ""), analysis)
-        st.subheader("简历修改提示词")
-        st.caption("可直接复制；已包含硬约束、JD、个人画像和防止虚构的要求。")
-        st.code(prompt, language="text", line_numbers=False)
-        with st.expander("使用我的 API 生成深度建议"):
-            api_ready = st.session_state.api_config_status == "connected"
-            if api_ready:
-                st.success(f"模型可以调用：{st.session_state.api_provider} / {st.session_state.api_model}")
-            elif st.session_state.api_config_status == "saved":
-                st.warning("API 已保存但尚未测试，请先到“我的资料”点击“保存并测试连接”。")
-            elif st.session_state.api_config_status == "failed":
-                st.error(f"API 连接失败：{st.session_state.api_status_message}")
-            else:
-                st.warning("尚未配置 API，请先到“我的资料”粘贴 Key 并测试连接。")
-            st.caption("请求会把当前 JD 和简历文本发送给你选择的模型服务商。")
-            if st.button("生成深度分析与改写", width="content", disabled=not api_ready):
-                try:
-                    with st.spinner("正在分析岗位与简历……"):
-                        st.session_state["llm_result"] = chat_completion(st.session_state.api_key, st.session_state.api_base_url, st.session_state.api_model, prompt)
-                except Exception as error:
-                    st.error(str(error))
-            if st.session_state.get("llm_result"):
-                st.markdown(st.session_state["llm_result"])
+        save_scope = "已保存到你的岗位库" if st.session_state.auth_mode == "account" else "已加入本次访问的临时岗位库"
+        render_analysis_report(
+            jd_text,
+            analysis_profile,
+            analysis,
+            st.session_state.get("analysis_resume", ""),
+            f"{save_scope}：{st.session_state.get('saved_record_id', '')}",
+        )
 
 elif page == "岗位库":
     st.title("岗位库")
     library_scope = "当前账户" if st.session_state.auth_mode == "account" else "本次访问"
-    st.markdown(f'<div class="caption">{len(st.session_state.user_jobs)} 条已分析岗位 · 仅显示{library_scope}的数据，并按最新求职画像重新判断</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="caption">{len(st.session_state.user_jobs)} 条已分析岗位 · 当前支持 {len(ROLE_ORDER)} 类岗位 · 仅显示{library_scope}的数据，并按最新规则与求职画像重新判断</div>', unsafe_allow_html=True)
+    with st.expander(f"查看完整岗位分类（{len(ROLE_ORDER)} 类）"):
+        taxonomy_df = pd.DataFrame([{"#": index, "岗位大类": family, "覆盖方向": ROLE_DESCRIPTIONS[family]} for index, family in enumerate(ROLE_ORDER, 1)])
+        st.dataframe(taxonomy_df, width="stretch", hide_index=True)
     if not profile_ready:
         st.warning("请先到“我的资料”补齐求职画像，岗位库才能按你的条件重新计算并展示诊断结果。")
     f1, f2, f3 = st.columns([1.35, 1.1, 1.35])
-    families = f1.multiselect("岗位大类", ROLE_ORDER, default=ROLE_ORDER)
+    families = f1.multiselect(f"岗位大类（{len(ROLE_ORDER)} 类）", ROLE_ORDER, default=ROLE_ORDER)
     decisions = f2.multiselect("综合结论", ["可以投递", "投递前需确认", "不建议投递"], default=["可以投递", "投递前需确认", "不建议投递"])
     query = f3.text_input("搜索", placeholder="公司、岗位或记录ID")
     with st.expander("更多约束筛选"):
@@ -741,6 +854,7 @@ else:
     evaluation_tab, about_tab = st.tabs(["评测实验", "关于项目"])
     with evaluation_tab:
         st.markdown('<div class="caption">26 条跨平台样本先冻结预测，之后才建立人工金标准</div>', unsafe_allow_html=True)
+        st.caption("以下岗位大类指标对应原 AI 岗位六类体系；新扩展的 13 类商科体系已完成规则测试，尚未建立独立人工标注评测集。")
         metric_names = {"role_family": "岗位大类", "weekly_days": "每周天数", "minimum_months": "最低月数", "constraint_result": "硬约束", "bad_case_binary": "Bad Case识别", "bad_case_type": "Bad Case类型"}
         metric_df = pd.DataFrame([{"指标": metric_names[key], "正确数": value["correct"], "样本数": value["total"], "准确率": value["accuracy"]} for key, value in report["metrics"].items()])
         cols = st.columns(3)
@@ -755,7 +869,7 @@ else:
         st.write("**大模型层**：理解复杂职责、比较简历证据、生成针对性改写。需要用户自行配置 API，且不会参与已冻结的 v1 盲测成绩。")
         st.warning("任何模型生成的简历都必须人工核验。系统明确禁止虚构经历、指标、奖项和技能。")
         st.subheader("项目版本")
-        version_df = pd.DataFrame([["内部数据集", "30 条 BOSS JD", "人工复核完成"], ["外部盲测", "26 条 · 3 平台", "冻结后标注"], ["规则基线", "rule-baseline-v1", "保留原始结果"], ["求职助手", "web-v4", "商科分类 + 一键 Demo + 深浅主题"]], columns=["模块", "版本/规模", "状态"])
+        version_df = pd.DataFrame([["内部数据集", "30 条 BOSS JD", "人工复核完成"], ["外部盲测", "26 条 · 3 平台", "冻结后标注"], ["规则基线", "rule-baseline-v1", "保留原始结果"], ["求职助手", "web-v5", "独立 Demo + 13 类岗位 + 简历自动回填"]], columns=["模块", "版本/规模", "状态"])
         st.dataframe(version_df, width="stretch", hide_index=True)
 
 sidebar_api_status.caption("模型：" + api_status_label())

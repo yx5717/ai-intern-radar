@@ -32,7 +32,23 @@ with tempfile.TemporaryDirectory() as directory:
     assert app.session_state["api_key"] == ""
     assert app.session_state["user_jobs"] == []
 
+    source_resume = Path(__file__).resolve().parents[2] / "简历" / "王嘉麟个人简历.docx"
     app.radio[0].set_value("我的资料").run()
+    app.file_uploader[0].upload(
+        source_resume.name,
+        source_resume.read_bytes(),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ).run()
+    assert not app.exception
+    assert app.session_state["profile_school"] == "首都经济贸易大学"
+    assert app.session_state["profile_major"] == "经济统计学"
+    assert app.session_state["profile_degree"] == "本科"
+    assert app.session_state["profile_graduation_year"] == 2028
+    assert "RAG" in app.session_state["profile_skills"]
+    assert app.session_state["profile_school_tier"] == "未填写"
+    assert app.session_state["profile_available_days"] == "未填写"
+    assert any("上传简历后" in item.value and "手动填写" in item.value for item in app.info)
+
     next(item for item in app.text_input if item.label == "学校").set_value("持久化测试大学")
     next(item for item in app.text_input if item.label == "专业").set_value("经济统计学")
     for label, value in [
@@ -77,6 +93,19 @@ with tempfile.TemporaryDirectory() as directory:
     assert app.session_state["api_key"] == "sk-persisted-secret"
     assert len(app.session_state["user_jobs"]) == 1
 
+    demo = AppTest.from_file(str(app_path), default_timeout=30).run()
+    next(item for item in demo.button if item.label == "查看完整 Demo").click().run()
+    assert not demo.exception
+    assert demo.session_state["auth_mode"] == "demo"
+    assert demo.session_state["nav_page"] == "示例 Demo"
+    assert demo.session_state["profile_school"] == "首都经济贸易大学"
+    assert demo.session_state["profile_school_tier"] == "非985/211"
+    assert demo.session_state["profile_available_days"] == 4
+    assert demo.session_state["resume_text"]
+    assert "贝壳找房" in demo.session_state["analysis_jd"]
+    assert demo.session_state["user_jobs"] == []
+    assert any(item.value == "一份完整诊断是怎样的" for item in demo.title)
+
     guest = AppTest.from_file(str(app_path), default_timeout=30).run()
     assert not any("密码只保存加盐哈希" in item.value for item in guest.caption)
     next(item for item in guest.button if item.label == "游客体验").click().run()
@@ -89,11 +118,5 @@ with tempfile.TemporaryDirectory() as directory:
     next(item for item in guest.button if item.label == "退出登录").click().run()
     next(item for item in guest.button if item.label == "游客体验").click().run()
     assert guest.session_state["profile_school"] == ""
-    guest.radio[0].set_value("智能诊断").run()
-    next(item for item in guest.button if item.label == "一键运行完整示例").click().run()
-    assert not guest.exception
-    assert guest.session_state["analysis_mode"] == "demo"
-    assert guest.session_state["analysis_profile"].school == "首都经济贸易大学"
-    assert guest.session_state["user_jobs"] == []
 
 print({"register": "passed", "login": "passed", "account_restore": "passed", "guest_isolation": "passed"})
