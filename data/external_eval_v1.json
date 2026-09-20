@@ -1,0 +1,44 @@
+{
+  "evaluation_scope": "cross_platform_external_blind_test",
+  "prediction_version": "rule-baseline-v1-frozen",
+  "gold_version": "external-gold-v1",
+  "sample_count": 26,
+  "platforms": {
+    "实习僧": 10,
+    "智联招聘": 8,
+    "牛客网": 8
+  },
+  "metrics": {
+    "role_family": {
+      "correct": 19,
+      "total": 26,
+      "accuracy": 0.7307692307692307
+    },
+    "weekly_days": {
+      "correct": 17,
+      "total": 26,
+      "accuracy": 0.6538461538461539
+    },
+    "minimum_months": {
+      "correct": 26,
+      "total": 26,
+      "accuracy": 1
+    },
+    "constraint_result": {
+      "correct": 21,
+      "total": 26,
+      "accuracy": 0.8076923076923077
+    },
+    "bad_case_type": {
+      "correct": 21,
+      "total": 26,
+      "accuracy": 0.8076923076923077
+    },
+    "bad_case_binary": {
+      "correct": 23,
+      "total": 26,
+      "accuracy": 0.8846153846153846
+    }
+  },
+  "error_count": 26
+}

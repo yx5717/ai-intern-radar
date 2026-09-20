@@ -1,0 +1,24 @@
+{
+  "dataset": "external_jd_v1",
+  "evaluation_scope": "cross_platform_external_blind_test",
+  "answer_status_at_freeze": "not_labeled",
+  "prediction_version": "rule-baseline-v1",
+  "prediction_count": 26,
+  "frozen_at": "2026-09-20T08:49:00.655Z",
+  "constraints": {
+    "max_weekly_days": 4,
+    "min_months": 2,
+    "max_months": 4
+  },
+  "source_platforms": [
+    "实习僧",
+    "智联招聘",
+    "牛客网"
+  ],
+  "hashes": {
+    "input_sha256": "72a0e2dba09a289bb2cc71914fb0ada9551d26131526c5369e02813aa1e941f9",
+    "rules_sha256": "a9fbe870839ec3a6de9caf2ce95ff02a24829cf6262b741a918eb63ef03c6151",
+    "predictions_sha256": "177fe51d33ef3bf1e08562c97e986f469412168e73bd785ca1c57e1de7b317e9"
+  },
+  "immutable_note": "该文件是人工查看或标注外部样本答案前生成的冻结预测。后续评测不得回写或覆盖。"
+}

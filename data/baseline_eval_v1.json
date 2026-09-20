@@ -1,0 +1,75 @@
+{
+  "baseline_version": "rule-baseline-v1",
+  "split_version": "split-v1",
+  "evaluation_scope": "internal_holdout_not_blind",
+  "caveat": "规则开发者参与了全量标注；测试指标仅用于内部回归，不代表严格外部盲测。",
+  "constraints": {
+    "max_weekly_days": 4,
+    "min_months": 2,
+    "max_months": 4
+  },
+  "dev": {
+    "role_family": {
+      "correct": 19,
+      "total": 20,
+      "accuracy": 0.95
+    },
+    "weekly_days": {
+      "correct": 18,
+      "total": 20,
+      "accuracy": 0.9
+    },
+    "minimum_months": {
+      "correct": 19,
+      "total": 20,
+      "accuracy": 0.95
+    },
+    "constraint_result": {
+      "correct": 20,
+      "total": 20,
+      "accuracy": 1
+    },
+    "bad_case_binary": {
+      "correct": 18,
+      "total": 20,
+      "accuracy": 0.9
+    },
+    "bad_case_type": {
+      "correct": 17,
+      "total": 20,
+      "accuracy": 0.85
+    }
+  },
+  "test": {
+    "role_family": {
+      "correct": 10,
+      "total": 10,
+      "accuracy": 1
+    },
+    "weekly_days": {
+      "correct": 9,
+      "total": 10,
+      "accuracy": 0.9
+    },
+    "minimum_months": {
+      "correct": 10,
+      "total": 10,
+      "accuracy": 1
+    },
+    "constraint_result": {
+      "correct": 10,
+      "total": 10,
+      "accuracy": 1
+    },
+    "bad_case_binary": {
+      "correct": 9,
+      "total": 10,
+      "accuracy": 0.9
+    },
+    "bad_case_type": {
+      "correct": 9,
+      "total": 10,
+      "accuracy": 0.9
+    }
+  }
+}
