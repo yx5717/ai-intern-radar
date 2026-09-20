@@ -7,9 +7,23 @@ import requests
 
 PROVIDERS = {
     "DeepSeek": {"base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat"},
-    "通义千问（DashScope）": {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-plus"},
-    "自定义 OpenAI 兼容接口": {"base_url": "", "model": ""},
+    "通义千问": {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-plus"},
+    "豆包": {"base_url": "https://ark.cn-beijing.volces.com/api/v3", "model": "doubao-seed-1-6-250615"},
+    "GLM": {"base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4-flash"},
+    "Kimi": {"base_url": "https://api.moonshot.cn/v1", "model": "moonshot-v1-8k"},
+    "自定义": {"base_url": "", "model": ""},
 }
+PROVIDER_ALIASES = {
+    "通义千问（DashScope）": "通义千问",
+}
+
+
+def normalize_provider_config(provider: str, base_url: str, model: str) -> tuple[str, str, str]:
+    """Map removed provider labels to the custom option without losing saved settings."""
+    provider = PROVIDER_ALIASES.get(provider, provider)
+    if provider in PROVIDERS:
+        return provider, base_url, model
+    return "自定义", base_url, model
 
 
 def _request_error_message(status_code: int, detail: str = "") -> str:

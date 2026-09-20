@@ -7,23 +7,13 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from llm_client import PROVIDERS, chat_completion, test_connection
+from llm_client import PROVIDERS, chat_completion, normalize_provider_config, test_connection
 from radar_core import CandidateProfile, ROLE_DESCRIPTIONS, ROLE_ORDER, analyze_jd, build_resume_prompt
 from resume_parser import parse_resume
 from storage import UserStore
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
-DEMO_JOB_ID = "EXT026"
-DEMO_RESUME = """教育背景
-首都经济贸易大学 | 经济统计学 | 本科 | 2028届
-
-技能
-Python、SQL、Excel、R、Stata、FineBI、数据清洗、数据可视化、Prompt、RAG、知识库、Agent、Bad Case、PRD
-
-项目摘要（演示用匿名资料）
-参与 AI 岗位诊断项目，整理多平台 JD，建立硬约束标注标准，分析 Bad Case 并输出复盘报告。
-""".strip()
 ROLE_CHART_LABELS = {
     "AI产品与Agent产品": "AI产品/Agent",
     "大模型评测、训练与数据质量": "大模型评测/训练",
@@ -84,9 +74,21 @@ PROFILE_DEFAULTS = {
     "api_status_message": "环境变量中的 API Key 已载入，尚未测试连接。" if os.getenv("AI_RADAR_API_KEY", "") else "",
     "api_tested_at": "",
 }
+
+
 for state_key, default_value in PROFILE_DEFAULTS.items():
     if state_key not in st.session_state:
         st.session_state[state_key] = default_value
+
+(
+    st.session_state.api_provider,
+    st.session_state.api_base_url,
+    st.session_state.api_model,
+) = normalize_provider_config(
+    st.session_state.api_provider,
+    st.session_state.api_base_url,
+    st.session_state.api_model,
+)
 
 for draft_key, saved_key in {
     "api_provider_draft": "api_provider", "api_base_url_draft": "api_base_url",
@@ -94,6 +96,16 @@ for draft_key, saved_key in {
 }.items():
     if draft_key not in st.session_state:
         st.session_state[draft_key] = st.session_state[saved_key]
+
+(
+    st.session_state.api_provider_draft,
+    st.session_state.api_base_url_draft,
+    st.session_state.api_model_draft,
+) = normalize_provider_config(
+    st.session_state.api_provider_draft,
+    st.session_state.api_base_url_draft,
+    st.session_state.api_model_draft,
+)
 
 
 ACCOUNT_STATE_KEYS = [
@@ -127,6 +139,15 @@ def load_account_state(user_id: int) -> None:
     for key, default_value in PROFILE_DEFAULTS.items():
         if key != "user_jobs":
             st.session_state[key] = saved_state.get(key, default_value)
+    (
+        st.session_state.api_provider,
+        st.session_state.api_base_url,
+        st.session_state.api_model,
+    ) = normalize_provider_config(
+        st.session_state.api_provider,
+        st.session_state.api_base_url,
+        st.session_state.api_model,
+    )
     st.session_state.user_jobs = STORE.list_jobs(user_id)
     for widget_key in PROFILE_WIDGET_KEYS.values():
         st.session_state.pop(widget_key, None)
@@ -205,44 +226,6 @@ def start_guest_session() -> None:
     st.session_state.auth_user_id = None
     st.session_state.auth_username = "游客"
     st.session_state._account_loaded_for = "guest"
-    st.rerun()
-
-
-def start_demo_session() -> None:
-    for key in list(st.session_state):
-        del st.session_state[key]
-    for state_key, default_value in PROFILE_DEFAULTS.items():
-        st.session_state[state_key] = list(default_value) if isinstance(default_value, list) else default_value
-    demo_profile = CandidateProfile()
-    st.session_state.update({
-        "profile_school": demo_profile.school,
-        "profile_school_tier": demo_profile.school_tier,
-        "profile_major": demo_profile.major,
-        "profile_degree": demo_profile.degree,
-        "profile_graduation_year": demo_profile.graduation_year,
-        "profile_available_days": demo_profile.available_days,
-        "profile_max_months": demo_profile.max_months,
-        "profile_skills": demo_profile.skills,
-        "resume_text": DEMO_RESUME,
-        "resume_name": "示例简历（匿名）.txt",
-        "auth_mode": "demo",
-        "auth_user_id": None,
-        "auth_username": "示例访客",
-        "_account_loaded_for": "demo",
-        "nav_page": "示例 Demo",
-    })
-    for draft_key, saved_key in {
-        "api_provider_draft": "api_provider", "api_base_url_draft": "api_base_url",
-        "api_model_draft": "api_model", "api_key_draft": "api_key",
-    }.items():
-        st.session_state[draft_key] = st.session_state[saved_key]
-    demo_job = next(record for record in load_jsonl("external_jd_v1.jsonl") if record["job_id"] == DEMO_JOB_ID)
-    st.session_state["jd_input"] = demo_job["jd_raw"]
-    st.session_state["analysis"] = analyze_jd(demo_job["jd_raw"], demo_profile, DEMO_RESUME)
-    st.session_state["analysis_jd"] = demo_job["jd_raw"]
-    st.session_state["analysis_resume"] = DEMO_RESUME
-    st.session_state["analysis_profile"] = demo_profile
-    st.session_state["analysis_mode"] = "demo"
     st.rerun()
 
 
@@ -463,15 +446,9 @@ if os.getenv("AI_RADAR_TEST_BYPASS_AUTH") == "1" and not st.session_state.get("a
 if not st.session_state.get("auth_mode"):
     st.title("AI 实习雷达")
     st.markdown('<div class="caption">登录后，你的求职画像、简历、API 配置和岗位记录会自动恢复。</div>', unsafe_allow_html=True)
-    guest_entry, demo_entry = st.columns(2)
-    with guest_entry:
-        if st.button("游客体验", width="stretch"):
-            start_guest_session()
-        st.caption("从空白资料开始，退出后清除本次数据。")
-    with demo_entry:
-        if st.button("查看完整 Demo", type="primary", width="stretch"):
-            start_demo_session()
-        st.caption("预填画像、简历和真实 JD，直接查看完整诊断。")
+    if st.button("游客体验", width="stretch"):
+        start_guest_session()
+    st.caption("从空白资料开始，退出后清除本次数据。")
     login_tab, register_tab = st.tabs(["登录", "注册"])
     with login_tab:
         with st.form("login_form"):
@@ -518,17 +495,11 @@ report = load_json("external_eval_v1.json")
 with st.sidebar:
     st.markdown("### AI 实习雷达")
     st.caption("先判断能不能投，再决定怎么投")
-    account_label = (
-        f"账户：{st.session_state.auth_username}" if st.session_state.auth_mode == "account"
-        else "完整 Demo · 内容已预填" if st.session_state.auth_mode == "demo"
-        else "游客模式 · 数据不会保存"
-    )
+    account_label = f"账户：{st.session_state.auth_username}" if st.session_state.auth_mode == "account" else "游客模式 · 数据不会保存"
     st.caption(account_label)
     if st.button("退出登录", key="logout_button", width="stretch"):
         sign_out()
     nav_options = ["求职首页", "我的资料", "智能诊断", "岗位库", "更多"]
-    if st.session_state.auth_mode == "demo":
-        nav_options.insert(0, "示例 Demo")
     page = st.radio("导航", nav_options, label_visibility="collapsed", key="nav_page")
     st.divider()
     st.caption("我的求职画像")
@@ -545,38 +516,7 @@ profile = current_profile()
 profile_ready = profile_is_complete()
 catalog_df, catalog_details = build_catalog(profile, st.session_state.resume_text, st.session_state.user_jobs) if profile_ready else (pd.DataFrame(columns=CATALOG_COLUMNS), {})
 
-if page == "示例 Demo":
-    st.title("一份完整诊断是怎样的")
-    st.markdown('<div class="caption">已预填示例求职画像、匿名简历和一条真实 JD；你无需填写任何内容。</div>', unsafe_allow_html=True)
-    st.info("这是独立演示环境，不会保存账户、简历或岗位记录。完整体验后，可退出并注册自己的账户。")
-    d1, d2 = st.columns([1, 1])
-    with d1:
-        st.subheader("已预填的求职画像")
-        st.write(f"**学校与专业**：{profile.school}（{profile.school_tier}）· {profile.major}")
-        st.write(f"**学历与毕业**：{profile.degree} · {profile.graduation_year}届")
-        st.write(f"**实习时间**：每周最多{profile.available_days}天 · 最长{profile.max_months}个月")
-        st.write(f"**技能**：{profile.skills}")
-    with d2:
-        st.subheader("已预填的资料")
-        st.write(f"**简历**：{st.session_state.resume_name}")
-        st.write(f"**目标岗位**：{st.session_state.analysis['company']} · {st.session_state.analysis['role_title']}")
-        st.write("**大模型 API**：Demo 不需要配置，核心诊断由本地规则直接生成。")
-        st.write("**报告包含**：硬约束、适配度、技能缺口、核心交付物、行动建议和简历修改提示词。")
-        with st.expander("查看示例简历文本"):
-            st.text(st.session_state.resume_text)
-    with st.expander("查看真实 JD 原文"):
-        st.text(st.session_state.analysis_jd)
-    st.divider()
-    render_analysis_report(
-        st.session_state.analysis_jd,
-        st.session_state.analysis_profile,
-        st.session_state.analysis,
-        st.session_state.analysis_resume,
-        "当前为独立示例 Demo，不会写入岗位库。",
-        allow_api=False,
-    )
-
-elif page == "求职首页":
+if page == "求职首页":
     st.title("今天先投什么")
     if profile_ready:
         st.markdown(f'<div class="caption">{profile.school} · {profile.major} · {profile.graduation_year}届 · 每周最多{profile.available_days}天 · 最长{profile.max_months}个月</div>', unsafe_allow_html=True)
@@ -678,14 +618,14 @@ elif page == "我的资料":
         no_api, with_api = st.columns(2)
         no_api.info("**不配置 API**\n\n仍可使用硬约束判断、适配度分析、岗位库和简历修改提示词。")
         with_api.success("**配置 API**\n\n可在诊断结果中直接生成深度分析和简历改写，会消耗你自己的模型额度。")
-        st.caption("选择服务商后，地址和模型会自动填写；你只需要粘贴 API Key 并测试连接。")
+        st.caption("选择服务商后会自动填写官方地址和推荐模型；通常只需粘贴 API Key，若控制台指定了模型或接入点 ID，请按控制台信息修改模型。")
         st.selectbox("模型服务", list(PROVIDERS), key="api_provider_draft", on_change=apply_provider_defaults)
-        custom_provider = st.session_state.api_provider_draft == "自定义 OpenAI 兼容接口"
+        custom_provider = st.session_state.api_provider_draft == "自定义"
         if not custom_provider and (not st.session_state.api_base_url_draft or not st.session_state.api_model_draft):
             apply_provider_defaults()
         with st.form("api_config_form"):
-            st.text_input("Base URL", key="api_base_url_draft", disabled=not custom_provider, help="DeepSeek 和通义千问会自动填写；仅自定义接口需要手动输入。")
-            st.text_input("模型", key="api_model_draft", disabled=not custom_provider, help="已使用所选服务商的推荐模型；仅自定义接口需要手动输入。")
+            st.text_input("Base URL", key="api_base_url_draft", disabled=not custom_provider, help="预设服务商会自动填写官方地址；自定义地址需支持 Bearer 密钥和 /chat/completions 对话路径。")
+            st.text_input("模型", key="api_model_draft", help="已自动填写推荐模型。豆包等服务若要求推理接入点 ID，请替换为控制台提供的值。")
             st.text_input("API Key", type="password", key="api_key_draft", help="加密保存到当前账户，不写入岗位记录或导出文件。")
             save_col, test_col = st.columns(2)
             save_api = save_col.form_submit_button("保存配置", width="stretch")
@@ -783,7 +723,6 @@ elif page == "智能诊断":
             st.session_state["analysis_jd"] = jd_text
             st.session_state["analysis_resume"] = st.session_state.resume_text
             st.session_state["analysis_profile"] = profile
-            st.session_state["analysis_mode"] = "manual"
             st.session_state.pop("llm_result", None)
             st.session_state["saved_record_id"] = save_user_job(jd_text, st.session_state["analysis"])
     analysis = st.session_state.get("analysis")
@@ -869,7 +808,7 @@ else:
         st.write("**大模型层**：理解复杂职责、比较简历证据、生成针对性改写。需要用户自行配置 API，且不会参与已冻结的 v1 盲测成绩。")
         st.warning("任何模型生成的简历都必须人工核验。系统明确禁止虚构经历、指标、奖项和技能。")
         st.subheader("项目版本")
-        version_df = pd.DataFrame([["内部数据集", "30 条 BOSS JD", "人工复核完成"], ["外部盲测", "26 条 · 3 平台", "冻结后标注"], ["规则基线", "rule-baseline-v1", "保留原始结果"], ["求职助手", "web-v5", "独立 Demo + 13 类岗位 + 简历自动回填"]], columns=["模块", "版本/规模", "状态"])
+        version_df = pd.DataFrame([["内部数据集", "30 条 BOSS JD", "人工复核完成"], ["外部盲测", "26 条 · 3 平台", "冻结后标注"], ["规则基线", "rule-baseline-v1", "保留原始结果"], ["求职助手", "web-v6", "13 类岗位 + 简历自动回填 + 6 类模型接口"]], columns=["模块", "版本/规模", "状态"])
         st.dataframe(version_df, width="stretch", hide_index=True)
 
 sidebar_api_status.caption("模型：" + api_status_label())

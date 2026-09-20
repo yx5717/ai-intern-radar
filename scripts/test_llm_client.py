@@ -4,7 +4,25 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from llm_client import chat_completion, test_connection
+from llm_client import PROVIDERS, chat_completion, normalize_provider_config, test_connection
+
+
+expected_providers = {
+    "DeepSeek": ("https://api.deepseek.com/v1", "deepseek-chat"),
+    "通义千问": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
+    "豆包": ("https://ark.cn-beijing.volces.com/api/v3", "doubao-seed-1-6-250615"),
+    "GLM": ("https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
+    "Kimi": ("https://api.moonshot.cn/v1", "moonshot-v1-8k"),
+    "自定义": ("", ""),
+}
+assert set(PROVIDERS) == set(expected_providers)
+for provider, (base_url, model) in expected_providers.items():
+    assert PROVIDERS[provider] == {"base_url": base_url, "model": model}
+
+old_url = "https://legacy.example.com/v1"
+old_model = "legacy-model"
+assert normalize_provider_config("已移除的旧服务商", old_url, old_model) == ("自定义", old_url, old_model)
+assert normalize_provider_config("通义千问（DashScope）", old_url, old_model) == ("通义千问", old_url, old_model)
 
 
 response = Mock(status_code=200)

@@ -93,19 +93,6 @@ with tempfile.TemporaryDirectory() as directory:
     assert app.session_state["api_key"] == "sk-persisted-secret"
     assert len(app.session_state["user_jobs"]) == 1
 
-    demo = AppTest.from_file(str(app_path), default_timeout=30).run()
-    next(item for item in demo.button if item.label == "查看完整 Demo").click().run()
-    assert not demo.exception
-    assert demo.session_state["auth_mode"] == "demo"
-    assert demo.session_state["nav_page"] == "示例 Demo"
-    assert demo.session_state["profile_school"] == "首都经济贸易大学"
-    assert demo.session_state["profile_school_tier"] == "非985/211"
-    assert demo.session_state["profile_available_days"] == 4
-    assert demo.session_state["resume_text"]
-    assert "贝壳找房" in demo.session_state["analysis_jd"]
-    assert demo.session_state["user_jobs"] == []
-    assert any(item.value == "一份完整诊断是怎样的" for item in demo.title)
-
     guest = AppTest.from_file(str(app_path), default_timeout=30).run()
     assert not any("密码只保存加盐哈希" in item.value for item in guest.caption)
     next(item for item in guest.button if item.label == "游客体验").click().run()

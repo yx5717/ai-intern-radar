@@ -7,6 +7,7 @@ from streamlit.testing.v1 import AppTest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from llm_client import PROVIDERS
 from storage import UserStore
 
 
@@ -49,6 +50,26 @@ base_url_input = next(item for item in app.text_input if item.label == "Base URL
 model_input = next(item for item in app.text_input if item.label == "模型")
 if base_url_input.value != "https://api.deepseek.com/v1" or model_input.value != "deepseek-chat":
     raise AssertionError("DeepSeek 推荐地址和模型未自动填写")
+
+provider_select = next(item for item in app.selectbox if item.label == "模型服务")
+if list(provider_select.options) != list(PROVIDERS):
+    raise AssertionError(f"模型服务商选项不正确: {provider_select.options}")
+for provider, defaults in PROVIDERS.items():
+    provider_select.set_value(provider).run()
+    if app.exception:
+        raise AssertionError(f"切换到 {provider} 后页面报错: {app.exception}")
+    current_url = next(item for item in app.text_input if item.label == "Base URL")
+    current_model = next(item for item in app.text_input if item.label == "模型")
+    if current_url.value != defaults["base_url"] or current_model.value != defaults["model"]:
+        raise AssertionError(f"{provider} 未自动填写正确的地址和模型")
+    provider_select = next(item for item in app.selectbox if item.label == "模型服务")
+
+next(item for item in app.selectbox if item.label == "模型服务").set_value("自定义").run()
+next(item for item in app.text_input if item.label == "Base URL").set_value("https://custom.example.com/v1").run()
+next(item for item in app.text_input if item.label == "模型").set_value("custom-model").run()
+if app.session_state["api_base_url_draft"] != "https://custom.example.com/v1" or app.session_state["api_model_draft"] != "custom-model":
+    raise AssertionError("自定义接口的地址或模型不可编辑")
+next(item for item in app.selectbox if item.label == "模型服务").set_value("DeepSeek").run()
 next(item for item in app.text_input if item.label == "API Key").set_value("sk-test-session-key")
 next(item for item in app.button if item.label == "保存配置").click().run()
 if app.exception:
@@ -58,8 +79,6 @@ if app.session_state["api_config_status"] != "saved" or app.session_state["api_k
 
 app = AppTest.from_file(str(app_path), default_timeout=30).run()
 app.radio[0].set_value("智能诊断").run()
-if any(item.label == "一键运行完整示例" for item in app.button):
-    raise AssertionError("智能诊断页仍保留旧 Demo 入口")
 jd = """贝壳找房 产品经理（AI效果评测方向）实习生
 4天/周，最少3个月
 岗位职责：参与Agent Chat和RAG效果评测标准搭建，构建测试集，分析Bad Case并输出优化建议。
