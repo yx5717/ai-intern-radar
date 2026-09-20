@@ -14,6 +14,22 @@ from storage import UserStore
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
+DEMO_JOB_ID = "EXT026"
+ROLE_CHART_LABELS = {
+    "AI产品与Agent产品": "AI产品/Agent",
+    "大模型评测、训练与数据质量": "大模型评测/训练",
+    "AI运营、知识库与增长运营": "AI运营/知识库",
+    "数据分析与商业/经营分析": "数据/商业分析",
+    "金融、投研与风险管理": "金融/投研/风控",
+    "财务、审计与税务": "财务/审计/税务",
+    "咨询、行业研究与战略分析": "咨询/行研/战略",
+    "市场、品牌与商业运营": "市场/品牌/运营",
+    "人力资源与组织发展": "人力资源/组织",
+    "销售、商务与客户成功": "销售/商务/客成",
+    "供应链、采购与物流": "供应链/采购/物流",
+    "产品与项目管理": "产品/项目管理",
+    "职能支持/其他岗位": "职能支持/其他",
+}
 STORE = UserStore(
     Path(os.getenv("AI_RADAR_DB_PATH", DATA / "ai_radar.db")),
     Path(os.getenv("AI_RADAR_KEY_PATH", DATA / ".storage_key")),
@@ -266,8 +282,8 @@ def save_user_job(jd_text: str, analysis: dict) -> str:
 st.set_page_config(page_title="AI 实习雷达", page_icon="◎", layout="wide", initial_sidebar_state="expanded")
 st.markdown("""
 <style>
-:root { --ink:#17212b; --muted:#65717e; --line:#d9e1e7; --blue:#176b94; --navy:#102f42; --green:#16734a; --amber:#986000; --red:#a33636; }
-.stApp { background:#f7f9fb; color:var(--ink); }
+:root { --ink:#17212b; --muted:#65717e; --line:#d9e1e7; --surface:#f7f9fb; --panel:#ffffff; --blue:#176b94; --navy:#102f42; --green:#16734a; --amber:#986000; --red:#a33636; }
+.stApp { background:var(--surface); color:var(--ink); }
 [data-testid="stSidebar"] { background:var(--navy); }
 [data-testid="stSidebar"] * { color:#edf5f8; }
 [data-testid="stSidebar"] .stRadio label { padding:7px 4px; }
@@ -281,19 +297,26 @@ h1 { font-size:1.9rem !important; margin-bottom:.15rem !important; }
 h2 { font-size:1.22rem !important; margin-top:1rem !important; }
 h3 { font-size:1.02rem !important; }
 .caption { color:var(--muted); font-size:.92rem; margin-bottom:1.1rem; }
-[data-testid="stMetric"] { background:white; border:1px solid var(--line); border-radius:6px; padding:13px 15px; min-height:102px; }
+[data-testid="stMetric"] { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:13px 15px; min-height:102px; }
 [data-testid="stMetricLabel"] { color:var(--muted); }
 [data-testid="stDataFrame"] { border:1px solid var(--line); border-radius:4px; }
-.decision { background:white; border:1px solid var(--line); border-left:5px solid var(--blue); padding:15px 17px; margin:4px 0 16px; }
+.decision { background:var(--panel); border:1px solid var(--line); border-left:5px solid var(--blue); padding:15px 17px; margin:4px 0 16px; }
 .decision .label { color:var(--muted); font-size:.82rem; }
 .decision .value { font-size:1.3rem; font-weight:700; margin:3px 0; }
-.constraint { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; background:white; border-top:1px solid var(--line); padding:11px 4px 7px; }
+.constraint { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; background:var(--panel); border-top:1px solid var(--line); padding:11px 4px 7px; }
 .constraint span { display:block; color:var(--muted); font-size:.86rem; margin-top:2px; }
 .constraint b { white-space:nowrap; }
 .pass { color:var(--green); } .verify { color:var(--amber); } .fail { color:var(--red); }
-.tagline { border-left:4px solid var(--blue); background:white; padding:11px 15px; margin:8px 0 16px; }
+.tagline { border-left:4px solid var(--blue); background:var(--panel); padding:11px 15px; margin:8px 0 16px; }
 .tagline strong { display:block; margin-bottom:3px; }
 div[data-testid="stButton"] button { border-radius:5px; }
+@media (prefers-color-scheme: dark) {
+  :root { --ink:#edf3f6; --muted:#b8c6ce; --line:#40515d; --surface:#0e171e; --panel:#17242d; --blue:#61b5df; --navy:#09131a; --green:#69d6a0; --amber:#f1c15c; --red:#ff8b8b; }
+  [data-testid="stSidebar"] { border-right:1px solid var(--line); }
+  [data-testid="stMetric"] [data-testid="stMetricValue"], .decision, .constraint, .tagline { color:var(--ink); }
+  [data-testid="stDataFrame"], [data-testid="stTable"] { color:var(--ink); }
+  code { color:#e6edf1 !important; }
+}
 @media (max-width:700px) { .block-container { padding-left:1rem; padding-right:1rem; } h1 { font-size:1.55rem !important; } }
 </style>
 """, unsafe_allow_html=True)
@@ -407,7 +430,9 @@ if page == "求职首页":
         st.dataframe(suitable[["公司", "岗位名称", "岗位大类", "适配度", "专业", "学校"]].sort_values("适配度", ascending=False).head(12), width="stretch", hide_index=True, height=415)
     with right:
         st.subheader("你的匹配方向")
-        st.bar_chart(suitable["岗位大类"].value_counts().reindex(ROLE_ORDER, fill_value=0), horizontal=True, color="#2878B5", height=310)
+        role_counts = suitable["岗位大类"].value_counts().reindex(ROLE_ORDER, fill_value=0)
+        role_counts.index = [ROLE_CHART_LABELS[role] for role in role_counts.index]
+        st.bar_chart(role_counts, horizontal=True, color="#2878B5", height=430)
         st.caption("以上结论已同时检查出勤、周期、学校层次、专业和毕业年份。")
     st.subheader("投递漏斗")
     f1, f2, f3 = st.columns(3)
@@ -558,9 +583,29 @@ elif page == "我的资料":
 elif page == "智能诊断":
     st.title("智能诊断")
     st.markdown('<div class="caption">直接粘贴完整 JD，岗位名称、时间和资格限制由系统自动提取</div>', unsafe_allow_html=True)
+    demo_job = next(record for record in load_jsonl("external_jd_v1.jsonl") if record["job_id"] == DEMO_JOB_ID)
+    demo_info, demo_action = st.columns([2.4, 1])
+    with demo_info:
+        st.markdown("**示例 Demo**")
+        demo_profile_note = "当前求职画像" if profile_ready else "示例求职画像（首都经济贸易大学·经济统计学·2028届）"
+        st.caption(f"真实岗位样本：{demo_job['company']} · {demo_job['role_title']}；使用{demo_profile_note}，不写入岗位库。")
+    with demo_action:
+        run_demo = st.button("一键运行完整示例", width="stretch")
+    if run_demo:
+        demo_profile = profile if profile_ready else CandidateProfile()
+        demo_resume = st.session_state.resume_text if profile_ready else ""
+        st.session_state["jd_input"] = demo_job["jd_raw"]
+        st.session_state["analysis"] = analyze_jd(demo_job["jd_raw"], demo_profile, demo_resume)
+        st.session_state["analysis_jd"] = demo_job["jd_raw"]
+        st.session_state["analysis_resume"] = demo_resume
+        st.session_state["analysis_profile"] = demo_profile
+        st.session_state["analysis_mode"] = "demo"
+        st.session_state.pop("saved_record_id", None)
+        st.session_state.pop("llm_result", None)
+    st.divider()
     left, right = st.columns([1.35, 1])
     with left:
-        jd_text = st.text_area("完整 JD", height=340, placeholder="把招聘网站上的岗位信息完整粘贴到这里，包括岗位名称、职责和任职要求……")
+        jd_text = st.text_area("完整 JD", height=340, placeholder="把招聘网站上的岗位信息完整粘贴到这里，包括岗位名称、职责和任职要求……", key="jd_input")
     with right:
         st.subheader("本次使用的资料")
         if profile_ready:
@@ -581,6 +626,8 @@ elif page == "智能诊断":
             st.session_state["analysis"] = analyze_jd(jd_text, profile, st.session_state.resume_text)
             st.session_state["analysis_jd"] = jd_text
             st.session_state["analysis_resume"] = st.session_state.resume_text
+            st.session_state["analysis_profile"] = profile
+            st.session_state["analysis_mode"] = "manual"
             st.session_state.pop("llm_result", None)
             st.session_state["saved_record_id"] = save_user_job(jd_text, st.session_state["analysis"])
     analysis = st.session_state.get("analysis")
@@ -591,8 +638,11 @@ elif page == "智能诊断":
         m2.metric("每周要求", analysis["schedule"]["weekly_days"] or "未提及")
         m3.metric("最低周期", analysis["schedule"]["minimum_months"] or "未提及")
         m4.metric("识别技能", len(analysis["jd_skills"]))
-        save_scope = "已保存到你的岗位库" if st.session_state.auth_mode == "account" else "已加入本次访问的临时岗位库"
-        st.caption(f"{save_scope}：{st.session_state.get('saved_record_id', '')}")
+        if st.session_state.get("analysis_mode") == "demo":
+            st.caption("当前为示例 Demo，不会写入你的岗位库。")
+        else:
+            save_scope = "已保存到你的岗位库" if st.session_state.auth_mode == "account" else "已加入本次访问的临时岗位库"
+            st.caption(f"{save_scope}：{st.session_state.get('saved_record_id', '')}")
         hard, fit = st.columns([1, 1])
         with hard:
             st.subheader("硬约束")
@@ -613,7 +663,8 @@ elif page == "智能诊断":
         st.subheader("建议动作")
         for index, action in enumerate(analysis["next_actions"], 1):
             st.write(f"{index}. {action}")
-        prompt = build_resume_prompt(jd_text, profile, st.session_state.get("analysis_resume", ""), analysis)
+        analysis_profile = st.session_state.get("analysis_profile", profile)
+        prompt = build_resume_prompt(jd_text, analysis_profile, st.session_state.get("analysis_resume", ""), analysis)
         st.subheader("简历修改提示词")
         st.caption("可直接复制；已包含硬约束、JD、个人画像和防止虚构的要求。")
         st.code(prompt, language="text", line_numbers=False)
@@ -698,13 +749,13 @@ else:
     with about_tab:
         st.markdown('<div class="caption">项目背景、分析边界与版本说明</div>', unsafe_allow_html=True)
         st.subheader("为什么做")
-        st.write("作为在校生，面对不同平台、不同公司写法各异的实习 JD，很难快速判断岗位是否真正适合自己。AI 实习雷达把求职过程拆成三个问题：能不能投、值不值得投、应该怎么投。它先识别时间、学校、专业和毕业年份等硬约束，再分析岗位核心交付物与个人能力，最后生成可审计的简历修改提示词或调用大模型完成深度改写。")
+        st.write("作为在校生，面对不同平台、不同公司写法各异的实习 JD，很难快速判断岗位是否真正适合自己。AI 实习雷达把求职过程拆成三个问题：能不能投、值不值得投、应该怎么投。它先识别时间、学校、专业和毕业年份等硬约束，再分析岗位核心交付物与个人能力，最后生成可审计的简历修改提示词或调用大模型完成深度改写。当前分类同时覆盖 AI 应用岗与商科院校常见的金融、财会、咨询、市场、人力、商务和供应链方向。")
         st.subheader("规则与大模型的分工")
         st.write("**本地规则层**：信息提取、明确硬约束、证据定位、冻结评测，可离线运行。")
         st.write("**大模型层**：理解复杂职责、比较简历证据、生成针对性改写。需要用户自行配置 API，且不会参与已冻结的 v1 盲测成绩。")
         st.warning("任何模型生成的简历都必须人工核验。系统明确禁止虚构经历、指标、奖项和技能。")
         st.subheader("项目版本")
-        version_df = pd.DataFrame([["内部数据集", "30 条 BOSS JD", "人工复核完成"], ["外部盲测", "26 条 · 3 平台", "冻结后标注"], ["规则基线", "rule-baseline-v1", "保留原始结果"], ["求职助手", "web-v3", "账户持久化 + 硬约束 + 简历匹配"]], columns=["模块", "版本/规模", "状态"])
+        version_df = pd.DataFrame([["内部数据集", "30 条 BOSS JD", "人工复核完成"], ["外部盲测", "26 条 · 3 平台", "冻结后标注"], ["规则基线", "rule-baseline-v1", "保留原始结果"], ["求职助手", "web-v4", "商科分类 + 一键 Demo + 深浅主题"]], columns=["模块", "版本/规模", "状态"])
         st.dataframe(version_df, width="stretch", hide_index=True)
 
 sidebar_api_status.caption("模型：" + api_status_label())

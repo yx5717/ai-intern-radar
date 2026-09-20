@@ -10,8 +10,15 @@ ROLE_ORDER = [
     "大模型评测、训练与数据质量",
     "AI运营、知识库与增长运营",
     "数据分析与商业/经营分析",
-    "AI行业研究与战略分析",
-    "职能支持/边界岗位",
+    "金融、投研与风险管理",
+    "财务、审计与税务",
+    "咨询、行业研究与战略分析",
+    "市场、品牌与商业运营",
+    "人力资源与组织发展",
+    "销售、商务与客户成功",
+    "供应链、采购与物流",
+    "产品与项目管理",
+    "职能支持/其他岗位",
 ]
 
 SKILL_TERMS = [
@@ -19,6 +26,9 @@ SKILL_TERMS = [
     "Prompt", "RAG", "知识库", "工作流", "Agent", "智能体", "数据标注", "模型评测", "Bad Case",
     "Benchmark", "A/B测试", "用户研究", "需求分析", "PRD", "产品原型", "项目管理", "数据清洗",
     "数据可视化", "指标体系", "经营分析", "商业分析", "Pandas", "NumPy", "LangChain", "Dify", "Coze",
+    "Wind", "Choice", "Bloomberg", "估值建模", "财务建模", "财务分析", "行业研究", "风险管理",
+    "会计", "审计", "税务", "市场调研", "品牌策划", "用户运营", "内容运营", "广告投放",
+    "人力资源", "招聘", "供应链", "采购", "物流", "客户成功", "CRM",
 ]
 
 
@@ -56,7 +66,11 @@ def extract_identity(jd_text: str) -> dict:
     lines = [compact(line) for line in jd_text.splitlines() if compact(line)]
     first = lines[0] if lines else ""
     first = re.sub(r"^\d+\s*[.．、]\s*", "", first)
-    role_markers = r"(?:实习生|实习|产品经理|产品助理|数据分析师|算法|运营|研究员|训练师|工程师)"
+    role_markers = (
+        r"(?:实习生|实习|管培生|产品经理|产品助理|项目管理|数据分析师|算法|运营|"
+        r"研究员|研究助理|分析师|咨询|投研|行研|金融|证券|银行|风控|财务|会计|审计|税务|"
+        r"市场|品牌|人力资源|招聘|供应链|采购|物流|销售|商务|客户成功|训练师|工程师)"
+    )
     title = ""
     company = ""
     for line in lines[:15]:
@@ -324,19 +338,37 @@ def _constraint(name: str, status: str, conclusion: str, evidence: str) -> dict:
 def classify_role(title: str, body: str) -> tuple[str, str, bool]:
     text = f"{title}\n{body}"
     boundary = False
+    ai_context = bool(re.search(r"AI|人工智能|大模型|LLM|Agent|智能体|RAG|Prompt|知识库", text, re.I))
     if re.search(r"评测|数据标注|AI训练师|效果评价|Bad\s*Case|测试集|模型效果", text, re.I):
         family, direction = "大模型评测、训练与数据质量", "模型评测与数据质量"
         boundary = bool(re.search(r"产品助理|产品经理|运营", title))
-    elif re.search(r"AI工具|知识库|Prompt模板|工作流自动化|增长运营", text, re.I):
+    elif re.search(r"AI工具|知识库|Prompt模板|工作流自动化", text, re.I) or (ai_context and re.search(r"增长运营", text)):
         family, direction = "AI运营、知识库与增长运营", "AI工具与知识库运营"
-    elif re.search(r"产品经理|产品助理|Agent产品|AI产品", title, re.I):
+    elif ai_context and re.search(r"产品经理|产品助理|Agent产品|AI产品", title, re.I):
         family, direction = "AI产品与Agent产品", "AI产品与Agent交付"
     elif re.search(r"数据分析|数据科学|商业分析|经营分析|数据运营|数据开发|大数据", title):
         family, direction = "数据分析与商业/经营分析", "数据分析与数据治理"
-    elif re.search(r"行业研究|研究报告|产业研究|战略分析", text):
-        family, direction = "AI行业研究与战略分析", "AI产业研究"
+    elif re.search(r"投行|投研|券商|证券|基金|资产管理|银行|风控|风险管理|信用分析|量化|金融", title):
+        family = "金融、投研与风险管理"
+        direction = "投研与资产管理" if re.search(r"投研|行研|证券|基金|资产管理", text) else "金融业务与风险管理"
+    elif re.search(r"财务|会计|审计|税务|税务|财务分析|FP&A", title, re.I):
+        family, direction = "财务、审计与税务", "财务与审税"
+    elif re.search(r"咨询|行研|行业研究|研究报告|产业研究|战略分析|战略规划|政策研究|商业研究", text):
+        family, direction = "咨询、行业研究与战略分析", "咨询与行业战略研究"
+    elif re.search(r"市场|品牌|新媒体|内容运营|用户运营|活动运营|商业化运营|电商运营|社群运营", title):
+        family, direction = "市场、品牌与商业运营", "市场与用户运营"
+    elif re.search(r"人力资源|人事|HRBP|招聘|人才|组织发展|薪酬|培训运营", title, re.I):
+        family, direction = "人力资源与组织发展", "招聘与人力资源运营"
+    elif re.search(r"供应链|采购|物流|仓储|履约|计划专员", title):
+        family, direction = "供应链、采购与物流", "供应链与采购管理"
+    elif re.search(r"销售|商务|BD|Business\s*Development|客户成功|客户经理|渠道", title, re.I):
+        family, direction = "销售、商务与客户成功", "商务拓展与客户运营"
+    elif re.search(r"产品经理|产品助理|项目管理|项目助理|PMO", title, re.I):
+        family, direction = "产品与项目管理", "通用产品与项目交付"
+    elif re.search(r"运营", title):
+        family, direction = "市场、品牌与商业运营", "综合运营"
     else:
-        family, direction, boundary = "职能支持/边界岗位", "其他边界岗位", True
+        family, direction, boundary = "职能支持/其他岗位", "其他或待人工确认", True
     return family, direction, boundary
 
 

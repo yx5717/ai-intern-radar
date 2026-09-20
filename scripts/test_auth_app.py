@@ -89,5 +89,11 @@ with tempfile.TemporaryDirectory() as directory:
     next(item for item in guest.button if item.label == "退出登录").click().run()
     next(item for item in guest.button if item.label == "游客体验").click().run()
     assert guest.session_state["profile_school"] == ""
+    guest.radio[0].set_value("智能诊断").run()
+    next(item for item in guest.button if item.label == "一键运行完整示例").click().run()
+    assert not guest.exception
+    assert guest.session_state["analysis_mode"] == "demo"
+    assert guest.session_state["analysis_profile"].school == "首都经济贸易大学"
+    assert guest.session_state["user_jobs"] == []
 
 print({"register": "passed", "login": "passed", "account_restore": "passed", "guest_isolation": "passed"})

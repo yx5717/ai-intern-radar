@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from radar_core import CandidateProfile, analyze_graduation, analyze_jd
+from radar_core import CandidateProfile, ROLE_ORDER, analyze_graduation, analyze_jd, classify_role
 
 
 profile = CandidateProfile()
@@ -53,10 +53,26 @@ senior_only_analysis = analyze_jd(
 assert next(row for row in senior_only_analysis["constraints"] if row["约束"] == "毕业年份")["结论"] == "不符合"
 assert senior_only_analysis["decision"] == "不建议投递"
 
+role_cases = {
+    "量化投研实习生": "金融、投研与风险管理",
+    "审计实习生": "财务、审计与税务",
+    "战略咨询实习生": "咨询、行业研究与战略分析",
+    "品牌市场实习生": "市场、品牌与商业运营",
+    "人力资源实习生": "人力资源与组织发展",
+    "商务拓展实习生": "销售、商务与客户成功",
+    "供应链采购实习生": "供应链、采购与物流",
+    "产品助理实习生": "产品与项目管理",
+}
+for role_title, expected_family in role_cases.items():
+    actual_family, _, _ = classify_role(role_title, f"{role_title}\n负责日常项目支持和分析报告。")
+    assert actual_family == expected_family, (role_title, actual_family)
+    assert actual_family in ROLE_ORDER
+
 print({
     "hard_school": hard_school["decision"],
     "preferred_major": next(row for row in preferred_major["constraints"] if row["约束"] == "专业")["结论"],
     "statistics_match": statistics_match["decision"],
     "senior_only": senior_only["结论"],
     "senior_preferred": senior_preferred["结论"],
+    "business_role_categories": len(role_cases),
 })

@@ -58,6 +58,13 @@ if app.session_state["api_config_status"] != "saved" or app.session_state["api_k
 
 app = AppTest.from_file(str(app_path), default_timeout=30).run()
 app.radio[0].set_value("智能诊断").run()
+next(item for item in app.button if item.label == "一键运行完整示例").click().run()
+if app.exception:
+    raise AssertionError(f"示例 Demo: {app.exception}")
+if app.session_state["analysis_mode"] != "demo" or "贝壳找房" not in app.session_state["jd_input"]:
+    raise AssertionError("示例 Demo 未载入真实 JD 并生成诊断")
+if len(app.session_state["user_jobs"]) != 0:
+    raise AssertionError("示例 Demo 不应写入用户岗位库")
 jd = """贝壳找房 产品经理（AI效果评测方向）实习生
 4天/周，最少3个月
 岗位职责：参与Agent Chat和RAG效果评测标准搭建，构建测试集，分析Bad Case并输出优化建议。
