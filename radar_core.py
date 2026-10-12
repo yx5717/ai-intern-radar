@@ -138,9 +138,14 @@ def clause_at(text: str, start: int, end: int, limit: int = 60) -> str:
 
 
 def extract_identity(jd_text: str) -> dict:
-    lines = [compact(line) for line in jd_text.splitlines() if compact(line)]
+    # 采集脚本会给每条 JD 加「1.」「2.」这类序号，它会挡住公司名与岗位名的拆分，
+    # 因此对每一行统一剥离，而不是只处理首行。
+    lines = [
+        re.sub(r"^\d+\s*[.．、]\s*", "", compact(line))
+        for line in jd_text.splitlines()
+        if compact(line)
+    ]
     first = lines[0] if lines else ""
-    first = re.sub(r"^\d+\s*[.．、]\s*", "", first)
     role_markers = (
         r"(?:实习生|实习|管培生|产品经理|产品助理|项目管理|数据分析师|算法|运营|"
         r"研究员|研究助理|分析师|咨询|投研|行研|金融|证券|银行|风控|财务|会计|审计|税务|"

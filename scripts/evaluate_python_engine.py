@@ -22,7 +22,7 @@ from radar_core import ROLE_ALIASES, CandidateProfile, analyze_jd, normalize_rol
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
-ENGINE_VERSION = "radar-core-py-v2"
+ENGINE_VERSION = "radar-core-py-v3"
 DECISION_TO_GOLD = {"可以投递": "通过", "投递前需确认": "需要核实", "不建议投递": "不通过"}
 COMPARED_METRICS = ("role_family", "weekly_days", "minimum_months", "constraint_result", "bad_case_binary", "bad_case_type")
 

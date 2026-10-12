@@ -1,3 +1,4 @@
+import html
 import json
 import os
 from datetime import datetime
@@ -47,16 +48,26 @@ def load_json(name: str) -> dict:
         return json.load(handle)
 
 
+def _h(value) -> str:
+    """把用户填写的文本安全地放进自绘 HTML 片段。"""
+    return html.escape(str(value if value is not None else ""))
+
+
 def metric_pct(value: float) -> str:
     return f"{value * 100:.1f}%"
 
 
+def _is_blank(value) -> bool:
+    return value is None or (isinstance(value, float) and pd.isna(value))
+
+
 def fit_metric(value) -> str:
-    return "—" if value is None or (isinstance(value, float) and pd.isna(value)) else f"{value} / 100"
+    return "—" if _is_blank(value) else f"{int(round(float(value)))} / 100"
 
 
 def fit_cell(value):
-    return "—" if value is None or (isinstance(value, float) and pd.isna(value)) else value
+    # 适配度列混入 "—" 后会被 pandas 提升为 float，直接展示会变成 72.0。
+    return "—" if _is_blank(value) else int(round(float(value)))
 
 
 def status_class(value: str) -> str:
@@ -349,7 +360,13 @@ def render_analysis_report(
     record_note: str,
     allow_api: bool = True,
 ) -> None:
-    st.markdown(f'<div class="decision"><div class="label">投递建议</div><div class="value {status_class(analysis["decision"])}">{analysis["decision"]}</div><div>{analysis["company"]} · {analysis["role_title"]} · {analysis["role_family"]}</div></div>', unsafe_allow_html=True)
+    decision_class = status_class(analysis["decision"])
+    st.markdown(
+        f'<div class="decision {decision_class}"><div class="label">投递建议</div>'
+        f'<div class="value {decision_class}">{_h(analysis["decision"])}</div>'
+        f'<div class="meta">{_h(analysis["company"])} · {_h(analysis["role_title"])} · {_h(analysis["role_family"])}</div></div>',
+        unsafe_allow_html=True,
+    )
     m1, m2, m3, m4 = st.columns(4)
     schedule = analysis["schedule"]
     day_metric = schedule["weekly_days"] if schedule["weekly_days"] is not None else ("待核实" if schedule["day_status"] == "需核实" else "未提及")
@@ -413,45 +430,143 @@ def render_analysis_report(
             st.markdown(st.session_state["llm_result"])
 
 
-st.set_page_config(page_title="AI 实习雷达", page_icon="◎", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="AI 实习雷达", page_icon="◎", layout="wide", initial_sidebar_state="auto")
 st.markdown("""
 <style>
-:root { --ink:#17212b; --muted:#65717e; --line:#d9e1e7; --surface:#f7f9fb; --panel:#ffffff; --blue:#176b94; --navy:#102f42; --green:#16734a; --amber:#986000; --red:#a33636; }
-.stApp { background:var(--surface); color:var(--ink); }
-[data-testid="stSidebar"] { background:var(--navy); }
-[data-testid="stSidebar"] * { color:#edf5f8; }
-[data-testid="stSidebar"] .stRadio label { padding:7px 4px; }
-[data-testid="stSidebar"] input { color:#17212b; }
-.st-key-logout_button button { background:#b42318 !important; border-color:#b42318 !important; color:#fff !important; }
-.st-key-logout_button button * { color:#fff !important; }
-.st-key-logout_button button:hover { background:#912018 !important; border-color:#912018 !important; }
-.block-container { padding-top:1.4rem; padding-bottom:2rem; max-width:1480px; }
-h1,h2,h3 { letter-spacing:0 !important; color:var(--ink); }
-h1 { font-size:1.9rem !important; margin-bottom:.15rem !important; }
-h2 { font-size:1.22rem !important; margin-top:1rem !important; }
-h3 { font-size:1.02rem !important; }
-.caption { color:var(--muted); font-size:.92rem; margin-bottom:1.1rem; }
-[data-testid="stMetric"] { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:13px 15px; min-height:102px; }
-[data-testid="stMetricLabel"] { color:var(--muted); }
-[data-testid="stDataFrame"] { border:1px solid var(--line); border-radius:4px; }
-.decision { background:var(--panel); border:1px solid var(--line); border-left:5px solid var(--blue); padding:15px 17px; margin:4px 0 16px; }
-.decision .label { color:var(--muted); font-size:.82rem; }
-.decision .value { font-size:1.3rem; font-weight:700; margin:3px 0; }
-.constraint { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; background:var(--panel); border-top:1px solid var(--line); padding:11px 4px 7px; }
-.constraint span { display:block; color:var(--muted); font-size:.86rem; margin-top:2px; }
-.constraint b { white-space:nowrap; }
-.pass { color:var(--green); } .verify { color:var(--amber); } .fail { color:var(--red); }
-.tagline { border-left:4px solid var(--blue); background:var(--panel); padding:11px 15px; margin:8px 0 16px; }
-.tagline strong { display:block; margin-bottom:3px; }
-div[data-testid="stButton"] button { border-radius:5px; }
-@media (prefers-color-scheme: dark) {
-  :root { --ink:#edf3f6; --muted:#b8c6ce; --line:#40515d; --surface:#0e171e; --panel:#17242d; --blue:#61b5df; --navy:#09131a; --green:#69d6a0; --amber:#f1c15c; --red:#ff8b8b; }
-  [data-testid="stSidebar"] { border-right:1px solid var(--line); }
-  [data-testid="stMetric"] [data-testid="stMetricValue"], .decision, .constraint, .tagline { color:var(--ink); }
-  [data-testid="stDataFrame"], [data-testid="stTable"] { color:var(--ink); }
-  code { color:#e6edf1 !important; }
+/* ===== 设计令牌：深色 · 专业 · 数据风 ===== */
+:root{
+  --bg:#0B0F14; --surface:#111823; --surface-2:#161E2A; --surface-3:#1B2431;
+  --line:#222C3A; --line-2:#2E3A4B;
+  --text:#E6EDF3; --dim:#94A2B2; --faint:#5F6C7B;
+  --accent:#4D9EFF; --accent-soft:rgba(77,158,255,.10); --accent-line:rgba(77,158,255,.40);
+  --ok:#46C97E; --warn:#E3B341; --bad:#F2727B;
+  --mono:"JetBrains Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
 }
-@media (max-width:700px) { .block-container { padding-left:1rem; padding-right:1rem; } h1 { font-size:1.55rem !important; } }
+html,body,.stApp,[data-testid="stAppViewContainer"]{ background:var(--bg); color:var(--text); font-family:var(--sans); }
+[data-testid="stHeader"]{ background:transparent; }
+.block-container{ padding-top:1.6rem; padding-bottom:3.5rem; max-width:1380px; }
+::selection{ background:var(--accent-soft); }
+::-webkit-scrollbar{ width:10px; height:10px; }
+::-webkit-scrollbar-track{ background:transparent; }
+::-webkit-scrollbar-thumb{ background:var(--line-2); border-radius:6px; border:2px solid var(--bg); }
+
+/* ===== 标题层级：小一号、紧、左侧刻度条 ===== */
+h1,h2,h3,h4{ color:var(--text); letter-spacing:0 !important; }
+h1{ font-size:1.5rem !important; font-weight:650 !important; margin:0 0 .1rem !important; }
+h2{ font-size:.98rem !important; font-weight:600 !important; margin:1.4rem 0 .5rem !important;
+    padding-left:9px; border-left:2px solid var(--accent); line-height:1.3; }
+h3{ font-size:.94rem !important; font-weight:600 !important; margin:.9rem 0 .35rem !important; }
+.caption{ color:var(--dim); font-size:.85rem; line-height:1.6; margin:-2px 0 14px; }
+
+/* ===== 侧栏 ===== */
+[data-testid="stSidebar"]{ background:var(--surface); border-right:1px solid var(--line); }
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p{ color:var(--dim); font-size:.84rem; }
+[data-testid="stSidebar"] hr{ margin:12px 0 !important; }
+.brand{ display:flex; align-items:center; gap:9px; font-weight:700; font-size:1rem; color:var(--text); margin-bottom:2px; }
+.brand .dot{ width:7px; height:7px; border-radius:2px; background:var(--accent); box-shadow:0 0 10px var(--accent); flex:none; }
+.kv{ display:flex; justify-content:space-between; gap:12px; font-size:.79rem; padding:5px 0; border-bottom:1px dashed var(--line); }
+.kv .k{ color:var(--faint); flex:none; }
+.kv .v{ color:var(--text); text-align:right; font-family:var(--mono); }
+/* 导航：用背景高亮表达选中态，隐藏单选圆点 */
+[data-testid="stSidebar"] [role="radiogroup"]{ gap:2px; }
+[data-testid="stSidebar"] [data-testid="stRadioOption"]{
+  padding:7px 10px; border-radius:6px; border:1px solid transparent; transition:background .12s,border-color .12s;
+}
+[data-testid="stSidebar"] [data-testid="stRadioOption"]:hover{ background:var(--surface-2); }
+[data-testid="stSidebar"] [data-testid="stRadioOption"][data-selected="true"]{
+  background:rgba(77,158,255,.16); border-color:var(--accent-line);
+}
+[data-testid="stSidebar"] [data-testid="stRadioOption"][data-selected="true"] p{ color:var(--text) !important; font-weight:600; }
+[data-testid="stSidebar"] [data-testid="stRadioOption"] > div > div:first-child{ display:none; }
+
+/* ===== 指标卡：等宽数字 + 左侧刻度 ===== */
+[data-testid="stMetric"]{ position:relative; overflow:hidden; background:var(--surface);
+  border:1px solid var(--line); border-radius:8px; padding:13px 15px; min-height:92px; }
+[data-testid="stMetric"]::before{ content:""; position:absolute; left:0; top:0; bottom:0; width:2px;
+  background:var(--accent); opacity:.5; }
+[data-testid="stMetricLabel"] p{ color:var(--faint) !important; font-size:.74rem !important; letter-spacing:.05em; }
+[data-testid="stMetricValue"]{ font-family:var(--mono); font-size:1.42rem !important; font-weight:600 !important; color:var(--text) !important; }
+/* 说明文字不是涨跌值，去掉绿/红徽章底色，统一降为中性灰 */
+[data-testid="stMetricDelta"]{ font-size:.74rem !important; color:var(--faint) !important; background:transparent !important; }
+[data-testid="stMetricDelta"] *{ color:var(--faint) !important; background:transparent !important; }
+[data-testid^="stMetricDeltaIcon"]{ display:none !important; }
+
+/* ===== 结论横幅 ===== */
+.decision{ position:relative; overflow:hidden; background:var(--surface); border:1px solid var(--line);
+  border-radius:8px; padding:15px 18px; margin:2px 0 14px; }
+.decision::before{ content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--accent); }
+.decision.pass::before{ background:var(--ok); }
+.decision.verify::before{ background:var(--warn); }
+.decision.fail::before{ background:var(--bad); }
+.decision .label{ color:var(--faint); font-size:.72rem; letter-spacing:.1em; }
+.decision .value{ font-family:var(--mono); font-size:1.4rem; font-weight:700; margin:4px 0 3px; }
+.decision .meta{ color:var(--dim); font-size:.84rem; }
+
+/* ===== 硬约束行 ===== */
+.constraint{ display:flex; justify-content:space-between; gap:16px; align-items:flex-start;
+  border-top:1px solid var(--line); padding:10px 2px 8px; }
+.constraint strong{ font-size:.88rem; font-weight:600; color:var(--text); }
+.constraint span{ display:block; color:var(--faint); font-size:.79rem; margin-top:3px; line-height:1.5; }
+.constraint b{ white-space:nowrap; font-family:var(--mono); font-size:.82rem; font-weight:600; }
+.pass{ color:var(--ok); } .verify{ color:var(--warn); } .fail{ color:var(--bad); }
+
+/* ===== 提示条 / 步骤条 / 对比卡 ===== */
+.tagline{ background:var(--surface-2); border:1px solid var(--line); border-left:3px solid var(--accent);
+  border-radius:6px; padding:12px 16px; margin:12px 0 18px; }
+.tagline strong{ display:block; margin-bottom:4px; font-size:.72rem; letter-spacing:.1em; color:var(--accent); }
+.flow{ display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--line);
+  border:1px solid var(--line); border-radius:8px; overflow:hidden; margin:6px 0 4px; }
+.flow .step{ background:var(--surface); padding:14px 16px; }
+.flow .step .n{ font-family:var(--mono); font-size:.7rem; letter-spacing:.12em; color:var(--accent); }
+.flow .step .t{ font-weight:600; font-size:.9rem; margin:6px 0 4px; color:var(--text); }
+.flow .step .d{ color:var(--faint); font-size:.78rem; line-height:1.55; }
+.pair{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:8px 0 12px; }
+.pair .card{ background:var(--surface-2); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+.pair .card.ok{ border-left:3px solid var(--ok); }
+.pair .card.mut{ border-left:3px solid var(--line-2); }
+.pair .card .t{ font-weight:600; font-size:.87rem; margin-bottom:5px; color:var(--text); }
+.pair .card .d{ color:var(--faint); font-size:.78rem; line-height:1.6; }
+
+/* ===== 组件：表格 / 按钮 / 标签页 / 折叠面板 / 输入 ===== */
+[data-testid="stDataFrame"]{ border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+.stButton button,.stFormSubmitButton button{ border-radius:6px; border:1px solid var(--line-2);
+  background:var(--surface-2); color:var(--text); font-weight:500; transition:background .12s,border-color .12s; }
+.stButton button:hover,.stFormSubmitButton button:hover{ background:var(--surface-3); border-color:var(--accent-line); color:var(--text); }
+.stButton button[data-testid="stBaseButton-primary"],.stButton button[kind="primary"],
+.stFormSubmitButton button[data-testid="stBaseButton-primaryFormSubmit"],.stFormSubmitButton button[kind="primaryFormSubmit"]{
+  background:var(--accent); border-color:var(--accent); color:#08131F; font-weight:600; }
+.stButton button[data-testid="stBaseButton-primary"]:hover,.stButton button[kind="primary"]:hover,
+.stFormSubmitButton button[data-testid="stBaseButton-primaryFormSubmit"]:hover,.stFormSubmitButton button[kind="primaryFormSubmit"]:hover{
+  background:#6BB0FF; border-color:#6BB0FF; color:#08131F; }
+.st-key-logout_button button{ background:transparent !important; border-color:var(--line-2) !important; color:var(--dim) !important; }
+.st-key-logout_button button:hover{ background:rgba(242,114,123,.10) !important; border-color:var(--bad) !important; color:var(--bad) !important; }
+.stTabs [data-baseweb="tab-list"]{ gap:4px; border-bottom:1px solid var(--line); }
+.stTabs [data-baseweb="tab"]{ padding:8px 14px; font-size:.86rem; color:var(--dim); }
+.stTabs [aria-selected="true"]{ color:var(--text); }
+[data-testid="stExpander"]{ border:1px solid var(--line) !important; border-radius:8px !important; background:var(--surface); }
+[data-testid="stTextInput"] input,[data-testid="stTextArea"] textarea,[data-baseweb="select"]>div{
+  background:var(--surface-2) !important; border-color:var(--line-2) !important; color:var(--text) !important; border-radius:6px !important; }
+[data-testid="stFileUploaderDropzone"]{ background:var(--surface-2); border:1px dashed var(--line-2); border-radius:8px; }
+/* 提示框统一降噪：中性底 + 彩色左轨，避免整块高饱和色块打断阅读。
+   彩色底实际画在内层 stAlertContainer 上，必须一并置空。 */
+[data-testid="stAlert"]{ background:var(--surface-2) !important; border:1px solid var(--line-2) !important;
+  border-left:3px solid var(--line-2) !important; border-radius:8px; }
+[data-testid="stAlertContainer"]{ background:transparent !important; }
+[data-testid="stAlert"]:has([data-testid="stAlertContentSuccess"]){ border-left-color:var(--ok) !important; }
+[data-testid="stAlert"]:has([data-testid="stAlertContentWarning"]){ border-left-color:var(--warn) !important; }
+[data-testid="stAlert"]:has([data-testid="stAlertContentError"]){ border-left-color:var(--bad) !important; }
+[data-testid="stAlert"]:has([data-testid="stAlertContentInfo"]){ border-left-color:var(--accent) !important; }
+[data-testid="stAlert"] [data-testid="stMarkdownContainer"] *{ color:var(--text) !important; }
+[data-testid="stCode"]{ border:1px solid var(--line); border-radius:8px; }
+code,pre,.stCode{ font-family:var(--mono) !important; }
+
+/* ===== 窄屏 ===== */
+@media (max-width:820px){
+  .block-container{ padding-left:1rem; padding-right:1rem; }
+  h1{ font-size:1.3rem !important; }
+  .flow,.pair{ grid-template-columns:1fr; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -515,30 +630,36 @@ report = load_json("external_eval_v1.json")
 engine_report = load_json("python_engine_eval_v1.json") if (DATA / "python_engine_eval_v1.json").exists() else None
 
 with st.sidebar:
-    st.markdown("### AI 实习雷达")
+    st.markdown('<div class="brand"><span class="dot"></span>AI 实习雷达</div>', unsafe_allow_html=True)
     st.caption("先判断能不能投，再决定怎么投")
-    account_label = f"账户：{st.session_state.auth_username}" if st.session_state.auth_mode == "account" else "游客模式 · 数据不会保存"
-    st.caption(account_label)
-    if st.button("退出登录", key="logout_button", width="stretch"):
-        sign_out()
     nav_options = ["求职首页", "我的资料", "智能诊断", "岗位库", "更多"]
     page = st.radio("导航", nav_options, label_visibility="collapsed", key="nav_page")
     st.divider()
     st.caption("我的求职画像")
-    st.write(st.session_state.profile_school or "学校未填写")
-    graduation_display = f"{st.session_state.profile_graduation_year}届" if st.session_state.profile_graduation_year != "未填写" else "毕业年份未填写"
-    st.write(f"{st.session_state.profile_major or '专业未填写'} · {graduation_display}")
-    days_display = f"每周最多 {st.session_state.profile_available_days} 天" if st.session_state.profile_available_days != "未填写" else "出勤未填写"
+    graduation_display = f"{st.session_state.profile_graduation_year} 届" if st.session_state.profile_graduation_year != "未填写" else "未填写"
     max_months_value = st.session_state.profile_max_months
     min_months_value = st.session_state.profile_min_months
     if max_months_value == "未填写":
-        months_display = "周期未填写"
+        months_display = "未填写"
     elif min_months_value == "未填写":
         months_display = f"最长 {max_months_value} 个月"
     else:
         months_display = f"{min_months_value}-{max_months_value} 个月"
-    st.write(f"{days_display} · {months_display}")
-    st.caption("简历：" + (st.session_state.resume_name or "尚未上传"))
+    days_display = f"{st.session_state.profile_available_days} 天/周" if st.session_state.profile_available_days != "未填写" else "未填写"
+    st.markdown(
+        f'<div class="kv"><span class="k">学校</span><span class="v">{_h(st.session_state.profile_school or "未填写")}</span></div>'
+        f'<div class="kv"><span class="k">专业</span><span class="v">{_h(st.session_state.profile_major or "未填写")}</span></div>'
+        f'<div class="kv"><span class="k">毕业</span><span class="v">{_h(graduation_display)}</span></div>'
+        f'<div class="kv"><span class="k">出勤</span><span class="v">{_h(days_display)}</span></div>'
+        f'<div class="kv"><span class="k">周期</span><span class="v">{_h(months_display)}</span></div>'
+        f'<div class="kv"><span class="k">简历</span><span class="v">{_h(st.session_state.resume_name or "未上传")}</span></div>',
+        unsafe_allow_html=True,
+    )
+    st.divider()
+    account_label = f"账户：{st.session_state.auth_username}" if st.session_state.auth_mode == "account" else "游客模式 · 数据不会保存"
+    st.caption(account_label)
+    if st.button("退出登录", key="logout_button", width="stretch"):
+        sign_out()
     sidebar_api_status = st.empty()
 
 profile = current_profile()
@@ -556,10 +677,10 @@ if page == "求职首页":
     blocked = catalog_df[catalog_df["综合结论"] == "不建议投递"]
     cols = st.columns(4)
     cols[0].metric("可直接投递", len(suitable), "先做定制简历")
-    cols[1].metric("联系后再投", len(verify), "核实所有模糊约束")
-    cols[2].metric("暂不建议", len(blocked), "存在明确硬门槛")
-    diagnosis_note = "已保存到当前账户" if st.session_state.auth_mode == "account" else "仅保留在本次访问"
-    cols[3].metric("我的诊断", len(st.session_state.user_jobs), diagnosis_note)
+    cols[1].metric("联系后再投", len(verify), "核实模糊约束")
+    cols[2].metric("暂不建议", len(blocked), "存在硬门槛")
+    diagnosis_note = "已保存到账户" if st.session_state.auth_mode == "account" else "仅本次访问"
+    cols[3].metric("已存岗位", len(st.session_state.user_jobs), diagnosis_note)
     if not profile_ready:
         next_step = "先到“我的资料”填写学校、专业、学历、毕业年份和实习时间，再上传简历。大模型 API 可以稍后按需配置。"
     elif st.session_state.resume_text:
@@ -575,7 +696,17 @@ if page == "求职首页":
         else:
             priority = suitable.sort_values("适配度", ascending=False).head(12).copy()
             priority["适配度"] = priority["适配度"].map(fit_cell)
-            st.dataframe(priority[["公司", "岗位名称", "岗位大类", "适配度", "专业", "学校"]], width="stretch", hide_index=True, height=415)
+            # 首页是短名单，只保留决策必需的 4 列；完整约束在“岗位库”里看。
+            st.dataframe(
+                priority[["公司", "岗位名称", "岗位大类", "适配度"]], width="stretch", hide_index=True,
+                height=min(415, 58 + 35 * len(priority)),
+                column_config={
+                    "公司": st.column_config.TextColumn(width=88),
+                    "岗位名称": st.column_config.TextColumn(width=206),
+                    "岗位大类": st.column_config.TextColumn(width=138),
+                    "适配度": st.column_config.TextColumn(width=66),
+                },
+            )
     with right:
         st.subheader("你的匹配方向")
         role_counts = suitable["岗位大类"].value_counts().reindex(ROLE_ORDER, fill_value=0)
@@ -586,10 +717,17 @@ if page == "求职首页":
             st.caption("暂无可统计的岗位。完成一次诊断后，这里会显示你的匹配方向分布。")
         st.caption("以上结论已同时检查出勤、周期、学校层次、专业和毕业年份。")
     st.subheader("投递漏斗")
-    f1, f2, f3 = st.columns(3)
-    f1.info("**1. 能不能投**\n\n时间、学校、专业、毕业年份")
-    f2.info("**2. 值不值得投**\n\n职责、技能、经历证据与风险")
-    f3.info("**3. 怎么投**\n\n定制简历、提示词和招呼文案")
+    st.markdown(
+        '<div class="flow">'
+        '<div class="step"><div class="n">STEP 01</div><div class="t">能不能投</div>'
+        '<div class="d">时间、学校、专业、毕业年份等硬门槛</div></div>'
+        '<div class="step"><div class="n">STEP 02</div><div class="t">值不值得投</div>'
+        '<div class="d">职责、技能、经历证据与主要风险</div></div>'
+        '<div class="step"><div class="n">STEP 03</div><div class="t">怎么投</div>'
+        '<div class="d">定制简历、修改提示词与招呼文案</div></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
 elif page == "我的资料":
     st.title("我的资料")
@@ -653,9 +791,15 @@ elif page == "我的资料":
             else "API Key 仅用于向所选模型服务商发起请求，游客模式只保留在当前会话；退出后即清除。JD 和简历文本会发送给所选服务商处理。"
         )
         st.caption(api_privacy)
-        no_api, with_api = st.columns(2)
-        no_api.info("**不配置 API**\n\n仍可使用硬约束判断、适配度分析、岗位库和简历修改提示词。")
-        with_api.success("**配置 API**\n\n可在诊断结果中直接生成深度分析和简历改写，会消耗你自己的模型额度。")
+        st.markdown(
+            '<div class="pair">'
+            '<div class="card mut"><div class="t">不配置 API</div>'
+            '<div class="d">硬约束判断、适配度分析、岗位库和简历修改提示词全部可用。</div></div>'
+            '<div class="card ok"><div class="t">配置 API</div>'
+            '<div class="d">在诊断结果中直接生成深度分析和简历改写，消耗你自己的模型额度。</div></div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
         st.caption("选择服务商后会自动填写官方地址和推荐模型；通常只需粘贴 API Key，若控制台指定了模型或接入点 ID，请按控制台信息修改模型。")
         st.selectbox("模型服务", list(PROVIDERS), key="api_provider_draft", on_change=apply_provider_defaults)
         custom_provider = st.session_state.api_provider_draft == "自定义"
@@ -789,24 +933,32 @@ elif page == "岗位库":
     decisions = f2.multiselect("综合结论", ["可以投递", "投递前需确认", "不建议投递"], default=["可以投递", "投递前需确认", "不建议投递"])
     query = f3.text_input("搜索", placeholder="公司、岗位或记录ID")
     with st.expander("更多约束筛选"):
-        c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3 = st.columns(3)
         status_options = ["符合", "未限制", "未提及", "加分项不满足", "需核实", "不符合"]
         day_filter = c1.multiselect("出勤", status_options, default=status_options)
         month_filter = c2.multiselect("周期", status_options, default=status_options)
-        school_filter = c3.multiselect("学校", status_options, default=status_options)
-        major_filter = c4.multiselect("专业", status_options, default=status_options)
-        grad_filter = c5.multiselect("毕业年份", status_options, default=status_options)
+        grad_filter = c3.multiselect("毕业年份", status_options, default=status_options)
     filtered = catalog_df[
         catalog_df["岗位大类"].isin(families) & catalog_df["综合结论"].isin(decisions)
-        & catalog_df["出勤"].isin(day_filter) & catalog_df["周期"].isin(month_filter) & catalog_df["学校"].isin(school_filter)
-        & catalog_df["专业"].isin(major_filter) & catalog_df["毕业年份"].isin(grad_filter)
+        & catalog_df["出勤"].isin(day_filter) & catalog_df["周期"].isin(month_filter)
+        & catalog_df["毕业年份"].isin(grad_filter)
     ]
     if query.strip():
         filtered = filtered[filtered["公司"].str.contains(query, case=False, na=False) | filtered["岗位名称"].str.contains(query, case=False, na=False) | filtered["记录ID"].str.contains(query, case=False, na=False)]
     st.caption(f"{len(filtered)} 条结果")
     library_display = filtered.copy()
     library_display["适配度"] = library_display["适配度"].map(fit_cell)
-    st.dataframe(library_display[["记录ID", "公司", "岗位名称", "岗位大类", "综合结论", "适配度", "出勤", "周期", "学校", "专业", "毕业年份", "保存时间"]], width="stretch", hide_index=True, height=430)
+    # 学校/专业在详情页的硬约束表里仍可查，列表页收掉它们，避免横向滚动。
+    library_columns = ["记录ID", "公司", "岗位名称", "岗位大类", "综合结论", "适配度", "出勤", "周期", "毕业年份", "保存时间"]
+    library_widths = {
+        "记录ID": 100, "公司": 88, "岗位名称": 190, "岗位大类": 140, "综合结论": 108,
+        "适配度": 66, "出勤": 68, "周期": 68, "毕业年份": 80, "保存时间": 112,
+    }
+    st.dataframe(
+        library_display[library_columns], width="stretch", hide_index=True,
+        height=min(430, 58 + 35 * len(library_display)),
+        column_config={name: st.column_config.TextColumn(width=width) for name, width in library_widths.items()},
+    )
     if not filtered.empty:
         selected_id = st.selectbox("查看岗位", filtered["记录ID"], format_func=lambda value: f"{value} · {filtered.loc[filtered['记录ID'] == value, '公司'].iloc[0]} · {filtered.loc[filtered['记录ID'] == value, '岗位名称'].iloc[0]}")
         selected = filtered[filtered["记录ID"] == selected_id].iloc[0]
@@ -873,7 +1025,7 @@ else:
         st.write("**大模型层**：理解复杂职责、比较简历证据、生成针对性改写。需要用户自行配置 API，且不会参与已冻结的 v1 盲测成绩。")
         st.warning("任何模型生成的简历都必须人工核验。系统明确禁止虚构经历、指标、奖项和技能。")
         st.subheader("项目版本")
-        version_df = pd.DataFrame([["内部数据集", "30 条 BOSS JD", "人工复核完成"], ["外部盲测", "26 条 · 3 平台", "冻结后标注"], ["规则基线", "rule-baseline-v1", "保留原始结果"], ["网页引擎回归", "radar-core-py-v2", "26 条 · 内部回归，非盲测"], ["求职助手", "web-v6", "13 类岗位 + 简历自动回填 + 6 类模型接口"]], columns=["模块", "版本/规模", "状态"])
+        version_df = pd.DataFrame([["内部数据集", "30 条 BOSS JD", "人工复核完成"], ["外部盲测", "26 条 · 3 平台", "冻结后标注"], ["规则基线", "rule-baseline-v1", "保留原始结果"], ["网页引擎回归", "radar-core-py-v3", "26 条 · 内部回归，非盲测"], ["求职助手", "web-v7", "深色数据风界面 + 13 类岗位 + 简历自动回填 + 6 类模型接口"]], columns=["模块", "版本/规模", "状态"])
         st.dataframe(version_df, width="stretch", hide_index=True)
 
 sidebar_api_status.caption("模型：" + api_status_label())

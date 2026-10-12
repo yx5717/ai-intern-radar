@@ -1,7 +1,7 @@
 {
   "evaluation_scope": "internal_regression_not_blind",
   "caveat": "Python 引擎（radar_core.py）在金标准建立之后编写，作者已见过答案，因此本结果只用于回归与迭代，不具备盲测意义，不得作为跨平台泛化成绩对外呈现。项目唯一的盲测结果仍是 rule-baseline-v1。",
-  "engine_version": "radar-core-py-v2",
+  "engine_version": "radar-core-py-v3",
   "gold_version": "external-gold-v1",
   "baseline_version": "rule-baseline-v1-frozen",
   "sample_count": 26,
@@ -41,14 +41,14 @@
       "accuracy": 0.8461538461538461
     },
     "bad_case_binary": {
-      "correct": 22,
+      "correct": 21,
       "total": 26,
-      "accuracy": 0.8461538461538461
+      "accuracy": 0.8076923076923077
     },
     "bad_case_type": {
-      "correct": 22,
+      "correct": 21,
       "total": 26,
-      "accuracy": 0.8461538461538461
+      "accuracy": 0.8076923076923077
     }
   },
   "comparison_with_blind_baseline": {
@@ -70,12 +70,12 @@
     },
     "bad_case_binary": {
       "baseline": 0.8846153846153846,
-      "python_engine": 0.8461538461538461
+      "python_engine": 0.8076923076923077
     },
     "bad_case_type": {
       "baseline": 0.8076923076923077,
-      "python_engine": 0.8461538461538461
+      "python_engine": 0.8076923076923077
     }
   },
-  "generated_at": "2026-10-12T08:26:30Z"
+  "generated_at": "2026-10-12T10:27:29Z"
 }

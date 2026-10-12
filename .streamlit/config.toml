@@ -1,0 +1,21 @@
+# AI 实习雷达 · 界面主题
+# 用 Streamlit 原生主题接管深色底，避免靠 CSS 补丁去猜组件内部结构。
+# 修改后需重启应用（streamlit run）才生效。
+
+[theme]
+base = "dark"
+primaryColor = "#4D9EFF"
+backgroundColor = "#0B0F14"
+secondaryBackgroundColor = "#111823"
+textColor = "#E6EDF3"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = true
+
+[server]
+headless = false
