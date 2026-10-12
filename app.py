@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from llm_client import PROVIDERS, chat_completion, normalize_provider_config, test_connection
-from radar_core import CandidateProfile, ROLE_DESCRIPTIONS, ROLE_ORDER, analyze_jd, build_resume_prompt
+from radar_core import CandidateProfile, ROLE_DESCRIPTIONS, ROLE_ORDER, analyze_jd, build_resume_prompt, months_span
 from resume_parser import parse_resume
 from storage import UserStore
 
@@ -51,6 +51,14 @@ def metric_pct(value: float) -> str:
     return f"{value * 100:.1f}%"
 
 
+def fit_metric(value) -> str:
+    return "—" if value is None or (isinstance(value, float) and pd.isna(value)) else f"{value} / 100"
+
+
+def fit_cell(value):
+    return "—" if value is None or (isinstance(value, float) and pd.isna(value)) else value
+
+
 def status_class(value: str) -> str:
     return "pass" if value in {"符合", "可以投递", "未限制"} else "fail" if value in {"不符合", "不建议投递"} else "verify"
 
@@ -67,7 +75,7 @@ def render_constraint(row: dict) -> None:
 PROFILE_DEFAULTS = {
     "profile_school": "", "profile_school_tier": "未填写", "profile_major": "",
     "profile_degree": "未填写", "profile_graduation_year": "未填写", "profile_available_days": "未填写",
-    "profile_max_months": "未填写", "profile_skills": "",
+    "profile_min_months": "未填写", "profile_max_months": "未填写", "profile_skills": "",
     "resume_text": "", "resume_name": "", "user_jobs": [],
     "api_provider": "DeepSeek", "api_base_url": PROVIDERS["DeepSeek"]["base_url"], "api_model": PROVIDERS["DeepSeek"]["model"], "api_key": os.getenv("AI_RADAR_API_KEY", ""),
     "api_config_status": "saved" if os.getenv("AI_RADAR_API_KEY", "") else "unconfigured",
@@ -110,7 +118,7 @@ for draft_key, saved_key in {
 
 ACCOUNT_STATE_KEYS = [
     "profile_school", "profile_school_tier", "profile_major", "profile_degree",
-    "profile_graduation_year", "profile_available_days", "profile_max_months", "profile_skills",
+    "profile_graduation_year", "profile_available_days", "profile_min_months", "profile_max_months", "profile_skills",
     "resume_text", "resume_name", "api_provider", "api_base_url", "api_model", "api_key",
     "api_config_status", "api_status_message", "api_tested_at",
 ]
@@ -121,6 +129,7 @@ PROFILE_WIDGET_KEYS = {
     "profile_degree": "profile_degree_input",
     "profile_graduation_year": "profile_graduation_year_input",
     "profile_available_days": "profile_available_days_input",
+    "profile_min_months": "profile_min_months_input",
     "profile_max_months": "profile_max_months_input",
     "profile_skills": "profile_skills_input",
 }
@@ -269,12 +278,14 @@ def key_fingerprint(api_key: str) -> str:
 def current_profile() -> CandidateProfile:
     graduation_year = st.session_state.profile_graduation_year
     available_days = st.session_state.profile_available_days
+    min_months = st.session_state.profile_min_months
     max_months = st.session_state.profile_max_months
     return CandidateProfile(
         school=st.session_state.profile_school, school_tier=st.session_state.profile_school_tier,
         major=st.session_state.profile_major, degree=st.session_state.profile_degree,
         graduation_year=int(graduation_year) if graduation_year != "未填写" else None,
         available_days=int(available_days) if available_days != "未填写" else None,
+        min_months=int(min_months) if min_months != "未填写" else None,
         max_months=int(max_months) if max_months != "未填写" else None,
         skills=st.session_state.profile_skills,
     )
@@ -340,10 +351,20 @@ def render_analysis_report(
 ) -> None:
     st.markdown(f'<div class="decision"><div class="label">投递建议</div><div class="value {status_class(analysis["decision"])}">{analysis["decision"]}</div><div>{analysis["company"]} · {analysis["role_title"]} · {analysis["role_family"]}</div></div>', unsafe_allow_html=True)
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("综合适配度", f"{analysis['fit_score']} / 100")
-    m2.metric("每周要求", analysis["schedule"]["weekly_days"] or "未提及")
-    m3.metric("最低周期", analysis["schedule"]["minimum_months"] or "未提及")
+    schedule = analysis["schedule"]
+    day_metric = schedule["weekly_days"] if schedule["weekly_days"] is not None else ("待核实" if schedule["day_status"] == "需核实" else "未提及")
+    month_metric = schedule["minimum_months"] if schedule["minimum_months"] is not None else ("待核实" if schedule["month_status"] == "需核实" else "未提及")
+    m1.metric("综合适配度", fit_metric(analysis["fit_score"]))
+    m2.metric("每周要求", day_metric)
+    m3.metric("最低周期", month_metric)
     m4.metric("识别技能", len(analysis["jd_skills"]))
+    if analysis.get("fit_breakdown"):
+        st.caption("适配度构成：" + " · ".join(f"{name} {item['得分']} 分（权重 {item['权重']}%）" for name, item in analysis["fit_breakdown"].items()))
+    elif analysis.get("fit_note"):
+        st.caption(analysis["fit_note"])
+    if analysis.get("bad_case_type") and analysis["bad_case_type"] != "无":
+        bad_case_detail = analysis.get("bad_case_evidence") or "岗位归类处于边界，建议人工复核后再决定投递方向。"
+        st.warning(f"需要留意：{analysis['bad_case_type']}。{bad_case_detail}")
     st.caption(record_note)
     hard, fit = st.columns([1, 1])
     with hard:
@@ -491,6 +512,7 @@ if st.session_state.auth_mode == "account" and st.session_state.get("_account_lo
     load_account_state(int(st.session_state.auth_user_id))
 
 report = load_json("external_eval_v1.json")
+engine_report = load_json("python_engine_eval_v1.json") if (DATA / "python_engine_eval_v1.json").exists() else None
 
 with st.sidebar:
     st.markdown("### AI 实习雷达")
@@ -507,7 +529,14 @@ with st.sidebar:
     graduation_display = f"{st.session_state.profile_graduation_year}届" if st.session_state.profile_graduation_year != "未填写" else "毕业年份未填写"
     st.write(f"{st.session_state.profile_major or '专业未填写'} · {graduation_display}")
     days_display = f"每周最多 {st.session_state.profile_available_days} 天" if st.session_state.profile_available_days != "未填写" else "出勤未填写"
-    months_display = f"最长 {st.session_state.profile_max_months} 个月" if st.session_state.profile_max_months != "未填写" else "周期未填写"
+    max_months_value = st.session_state.profile_max_months
+    min_months_value = st.session_state.profile_min_months
+    if max_months_value == "未填写":
+        months_display = "周期未填写"
+    elif min_months_value == "未填写":
+        months_display = f"最长 {max_months_value} 个月"
+    else:
+        months_display = f"{min_months_value}-{max_months_value} 个月"
     st.write(f"{days_display} · {months_display}")
     st.caption("简历：" + (st.session_state.resume_name or "尚未上传"))
     sidebar_api_status = st.empty()
@@ -519,7 +548,7 @@ catalog_df, catalog_details = build_catalog(profile, st.session_state.resume_tex
 if page == "求职首页":
     st.title("今天先投什么")
     if profile_ready:
-        st.markdown(f'<div class="caption">{profile.school} · {profile.major} · {profile.graduation_year}届 · 每周最多{profile.available_days}天 · 最长{profile.max_months}个月</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="caption">{profile.school} · {profile.major} · {profile.graduation_year}届 · 每周最多{profile.available_days}天 · 可实习{months_span(profile)}</div>', unsafe_allow_html=True)
     else:
         st.markdown('<div class="caption">完成求职画像后，这里会按你的真实条件生成投递优先级。</div>', unsafe_allow_html=True)
     suitable = catalog_df[catalog_df["综合结论"] == "可以投递"]
@@ -541,12 +570,20 @@ if page == "求职首页":
     left, right = st.columns([1.45, 1])
     with left:
         st.subheader("优先处理")
-        st.dataframe(suitable[["公司", "岗位名称", "岗位大类", "适配度", "专业", "学校"]].sort_values("适配度", ascending=False).head(12), width="stretch", hide_index=True, height=415)
+        if suitable.empty:
+            st.info("还没有可直接投递的岗位。到“智能诊断”粘贴一条 JD，结果会自动进入这里。")
+        else:
+            priority = suitable.sort_values("适配度", ascending=False).head(12).copy()
+            priority["适配度"] = priority["适配度"].map(fit_cell)
+            st.dataframe(priority[["公司", "岗位名称", "岗位大类", "适配度", "专业", "学校"]], width="stretch", hide_index=True, height=415)
     with right:
         st.subheader("你的匹配方向")
         role_counts = suitable["岗位大类"].value_counts().reindex(ROLE_ORDER, fill_value=0)
         role_counts.index = [ROLE_CHART_LABELS[role] for role in role_counts.index]
-        st.bar_chart(role_counts, horizontal=True, color="#2878B5", height=430)
+        if role_counts.sum() > 0:
+            st.bar_chart(role_counts, horizontal=True, color="#2878B5", height=430)
+        else:
+            st.caption("暂无可统计的岗位。完成一次诊断后，这里会显示你的匹配方向分布。")
         st.caption("以上结论已同时检查出勤、周期、学校层次、专业和毕业年份。")
     st.subheader("投递漏斗")
     f1, f2, f3 = st.columns(3)
@@ -567,9 +604,10 @@ elif page == "我的资料":
         c1, c2 = st.columns(2)
         c1.selectbox("学历", ["未填写", "本科", "硕士", "博士", "大专"], key="profile_degree_input", on_change=sync_profile_field, args=("profile_degree",))
         c2.selectbox("毕业年份", ["未填写", *range(2025, 2036)], key="profile_graduation_year_input", on_change=sync_profile_field, args=("profile_graduation_year",))
-        c3, c4 = st.columns(2)
+        c3, c4, c5 = st.columns(3)
         c3.selectbox("每周最多出勤", ["未填写", *range(1, 8)], key="profile_available_days_input", on_change=sync_profile_field, args=("profile_available_days",))
-        c4.selectbox("最长实习月数", ["未填写", *range(1, 13)], key="profile_max_months_input", on_change=sync_profile_field, args=("profile_max_months",))
+        c4.selectbox("最短可实习月数", ["未填写", *range(1, 13)], key="profile_min_months_input", on_change=sync_profile_field, args=("profile_min_months",))
+        c5.selectbox("最长实习月数", ["未填写", *range(1, 13)], key="profile_max_months_input", on_change=sync_profile_field, args=("profile_max_months",))
         st.text_area("已掌握技能", key="profile_skills_input", height=130, on_change=sync_profile_field, args=("profile_skills",))
     with p2:
         st.subheader("个人简历")
@@ -706,7 +744,7 @@ elif page == "智能诊断":
         st.subheader("本次使用的资料")
         if profile_ready:
             st.write(f"**画像**：{profile.school} · {profile.major} · {profile.graduation_year}届")
-            st.write(f"**时间**：每周最多{profile.available_days}天 · 最长{profile.max_months}个月")
+            st.write(f"**时间**：每周最多{profile.available_days}天 · 可实习{months_span(profile)}")
         else:
             st.warning("求职画像尚未填写完整，请先到“我的资料”补齐必填信息。")
         if st.session_state.resume_text:
@@ -766,7 +804,9 @@ elif page == "岗位库":
     if query.strip():
         filtered = filtered[filtered["公司"].str.contains(query, case=False, na=False) | filtered["岗位名称"].str.contains(query, case=False, na=False) | filtered["记录ID"].str.contains(query, case=False, na=False)]
     st.caption(f"{len(filtered)} 条结果")
-    st.dataframe(filtered[["记录ID", "公司", "岗位名称", "岗位大类", "综合结论", "适配度", "出勤", "周期", "学校", "专业", "毕业年份", "保存时间"]], width="stretch", hide_index=True, height=430)
+    library_display = filtered.copy()
+    library_display["适配度"] = library_display["适配度"].map(fit_cell)
+    st.dataframe(library_display[["记录ID", "公司", "岗位名称", "岗位大类", "综合结论", "适配度", "出勤", "周期", "学校", "专业", "毕业年份", "保存时间"]], width="stretch", hide_index=True, height=430)
     if not filtered.empty:
         selected_id = st.selectbox("查看岗位", filtered["记录ID"], format_func=lambda value: f"{value} · {filtered.loc[filtered['记录ID'] == value, '公司'].iloc[0]} · {filtered.loc[filtered['记录ID'] == value, '岗位名称'].iloc[0]}")
         selected = filtered[filtered["记录ID"] == selected_id].iloc[0]
@@ -774,7 +814,7 @@ elif page == "岗位库":
         selected_analysis = detail["analysis"]
         st.subheader(f"{selected['公司']} · {selected['岗位名称']}")
         d1, d2, d3, d4 = st.columns(4)
-        d1.metric("综合结论", selected["综合结论"]); d2.metric("适配度", f"{selected['适配度']} / 100"); d3.metric("岗位大类", selected["岗位大类"]); d4.metric("保存时间", selected["保存时间"] or "未记录")
+        d1.metric("综合结论", selected["综合结论"]); d2.metric("适配度", fit_metric(selected["适配度"])); d3.metric("岗位大类", selected["岗位大类"]); d4.metric("保存时间", selected["保存时间"] or "未记录")
         constraint_df = pd.DataFrame(selected_analysis["constraints"])
         st.dataframe(constraint_df, width="stretch", hide_index=True)
         st.write("**核心交付物**")
@@ -793,12 +833,37 @@ else:
     evaluation_tab, about_tab = st.tabs(["评测实验", "关于项目"])
     with evaluation_tab:
         st.markdown('<div class="caption">26 条跨平台样本先冻结预测，之后才建立人工金标准</div>', unsafe_allow_html=True)
-        st.caption("以下岗位大类指标对应原 AI 岗位六类体系；新扩展的 13 类商科体系已完成规则测试，尚未建立独立人工标注评测集。")
+        st.caption("样本来自实习僧、智联招聘和牛客网。以下岗位大类指标对应原 AI 岗位六类体系；新扩展的 13 类商科体系已完成规则测试，尚未建立独立人工标注评测集。")
         metric_names = {"role_family": "岗位大类", "weekly_days": "每周天数", "minimum_months": "最低月数", "constraint_result": "硬约束", "bad_case_binary": "Bad Case识别", "bad_case_type": "Bad Case类型"}
+        st.subheader("① 盲测基线（冻结）")
+        st.caption("rule-baseline-v1 · 预测在人工标注之前冻结，是项目唯一具备盲测意义的成绩")
         metric_df = pd.DataFrame([{"指标": metric_names[key], "正确数": value["correct"], "样本数": value["total"], "准确率": value["accuracy"]} for key, value in report["metrics"].items()])
         cols = st.columns(3)
         for index, row in metric_df.iterrows():
             cols[index % 3].metric(row["指标"], metric_pct(row["准确率"]), f"{row['正确数']}/{row['样本数']}")
+        st.subheader("② 当前网页引擎（内部回归）")
+        if not engine_report:
+            st.info("尚未生成 Python 引擎的回归报告。运行 scripts/evaluate_python_engine.py 后刷新本页。")
+        else:
+            st.warning(engine_report["caveat"])
+            engine_rows = [
+                {"指标": metric_names[key], "正确数": value["correct"], "样本数": value["total"], "准确率": value["accuracy"]}
+                for key, value in engine_report["metrics"].items() if value["accuracy"] is not None
+            ]
+            engine_df = pd.DataFrame(engine_rows)
+            engine_cols = st.columns(3)
+            for index, row in engine_df.iterrows():
+                engine_cols[index % 3].metric(row["指标"], metric_pct(row["准确率"]), f"{row['正确数']}/{row['样本数']}")
+            comparison_df = pd.DataFrame([
+                {"指标": metric_names[key], "盲测基线": metric_pct(value["baseline"]), "当前引擎": metric_pct(value["python_engine"])}
+                for key, value in engine_report["comparison_with_blind_baseline"].items()
+            ])
+            st.dataframe(comparison_df, width="stretch", hide_index=True)
+            st.caption(
+                f"岗位大类比较前已把金标准中的「职能支持/边界岗位」折叠为「职能支持/其他岗位」（{engine_report['taxonomy_alias_hits']} 条），"
+                "否则同一概念的两种写法会被直接判错。Bad Case 类型的剩余误差集中在「边界分类」，它取决于岗位分类质量，"
+                "「摘要正文冲突」为独立规则、可稳定命中。"
+            )
     with about_tab:
         st.markdown('<div class="caption">项目背景、分析边界与版本说明</div>', unsafe_allow_html=True)
         st.subheader("为什么做")
@@ -808,7 +873,7 @@ else:
         st.write("**大模型层**：理解复杂职责、比较简历证据、生成针对性改写。需要用户自行配置 API，且不会参与已冻结的 v1 盲测成绩。")
         st.warning("任何模型生成的简历都必须人工核验。系统明确禁止虚构经历、指标、奖项和技能。")
         st.subheader("项目版本")
-        version_df = pd.DataFrame([["内部数据集", "30 条 BOSS JD", "人工复核完成"], ["外部盲测", "26 条 · 3 平台", "冻结后标注"], ["规则基线", "rule-baseline-v1", "保留原始结果"], ["求职助手", "web-v6", "13 类岗位 + 简历自动回填 + 6 类模型接口"]], columns=["模块", "版本/规模", "状态"])
+        version_df = pd.DataFrame([["内部数据集", "30 条 BOSS JD", "人工复核完成"], ["外部盲测", "26 条 · 3 平台", "冻结后标注"], ["规则基线", "rule-baseline-v1", "保留原始结果"], ["网页引擎回归", "radar-core-py-v2", "26 条 · 内部回归，非盲测"], ["求职助手", "web-v6", "13 类岗位 + 简历自动回填 + 6 类模型接口"]], columns=["模块", "版本/规模", "状态"])
         st.dataframe(version_df, width="stretch", hide_index=True)
 
 sidebar_api_status.caption("模型：" + api_status_label())

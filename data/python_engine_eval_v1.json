@@ -1,0 +1,81 @@
+{
+  "evaluation_scope": "internal_regression_not_blind",
+  "caveat": "Python 引擎（radar_core.py）在金标准建立之后编写，作者已见过答案，因此本结果只用于回归与迭代，不具备盲测意义，不得作为跨平台泛化成绩对外呈现。项目唯一的盲测结果仍是 rule-baseline-v1。",
+  "engine_version": "radar-core-py-v2",
+  "gold_version": "external-gold-v1",
+  "baseline_version": "rule-baseline-v1-frozen",
+  "sample_count": 26,
+  "platforms": {
+    "实习僧": 10,
+    "智联招聘": 8,
+    "牛客网": 8
+  },
+  "profile": {
+    "available_days": 4,
+    "min_months": 2,
+    "max_months": 4
+  },
+  "taxonomy_aliases": {
+    "职能支持/边界岗位": "职能支持/其他岗位"
+  },
+  "taxonomy_alias_hits": 4,
+  "metrics": {
+    "role_family": {
+      "correct": 19,
+      "total": 26,
+      "accuracy": 0.7307692307692307
+    },
+    "weekly_days": {
+      "correct": 25,
+      "total": 26,
+      "accuracy": 0.9615384615384616
+    },
+    "minimum_months": {
+      "correct": 26,
+      "total": 26,
+      "accuracy": 1.0
+    },
+    "constraint_result": {
+      "correct": 22,
+      "total": 26,
+      "accuracy": 0.8461538461538461
+    },
+    "bad_case_binary": {
+      "correct": 22,
+      "total": 26,
+      "accuracy": 0.8461538461538461
+    },
+    "bad_case_type": {
+      "correct": 22,
+      "total": 26,
+      "accuracy": 0.8461538461538461
+    }
+  },
+  "comparison_with_blind_baseline": {
+    "role_family": {
+      "baseline": 0.7307692307692307,
+      "python_engine": 0.7307692307692307
+    },
+    "weekly_days": {
+      "baseline": 0.6538461538461539,
+      "python_engine": 0.9615384615384616
+    },
+    "minimum_months": {
+      "baseline": 1,
+      "python_engine": 1.0
+    },
+    "constraint_result": {
+      "baseline": 0.8076923076923077,
+      "python_engine": 0.8461538461538461
+    },
+    "bad_case_binary": {
+      "baseline": 0.8846153846153846,
+      "python_engine": 0.8461538461538461
+    },
+    "bad_case_type": {
+      "baseline": 0.8076923076923077,
+      "python_engine": 0.8461538461538461
+    }
+  },
+  "generated_at": "2026-10-12T08:16:40Z"
+}

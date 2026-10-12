@@ -37,6 +37,18 @@ ROLE_DESCRIPTIONS = {
     "职能支持/其他岗位": "法务、行政等其他职能，或暂无法稳定归类的岗位",
 }
 
+# 早期六类评测词表把兜底类别命名为「职能支持/边界岗位」，
+# 扩展成 13 类后改名为「职能支持/其他岗位」。比较时统一折叠到当前词表，
+# 否则同一概念的两种写法会被直接判错。
+ROLE_ALIASES = {
+    "职能支持/边界岗位": "职能支持/其他岗位",
+}
+
+
+def normalize_role_family(value: str) -> str:
+    """Fold historical label vocabulary onto the current taxonomy."""
+    return ROLE_ALIASES.get(value, value)
+
 SKILL_TERMS = [
     "Python", "SQL", "Excel", "R", "Stata", "FineBI", "Tableau", "Power BI", "Axure", "Figma",
     "Prompt", "RAG", "知识库", "工作流", "Agent", "智能体", "数据标注", "模型评测", "Bad Case",
@@ -56,13 +68,20 @@ class CandidateProfile:
     degree: str = "本科"
     graduation_year: int = 2028
     available_days: int = 4
-    min_months: int = 2
+    min_months: int | None = None
     max_months: int = 4
     arrival: str = "立即到岗"
     skills: str = "Python、R、Stata、Excel、FineBI、数据清洗、数据可视化、Prompt、RAG、知识库、工作流、Agent、Bad Case、PRD、项目管理"
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def months_span(profile: CandidateProfile) -> str:
+    """Describe the candidate's available internship length without inventing a lower bound."""
+    if profile.min_months is None:
+        return f"最长{profile.max_months}个月"
+    return f"{profile.min_months}-{profile.max_months}个月"
 
 
 def compact(text: str) -> str:
@@ -76,6 +95,46 @@ def evidence_fragment(text: str, pattern: str, radius: int = 34) -> str:
     start = max(0, match.start() - radius)
     end = min(len(text), match.end() + radius)
     return compact(text[start:end].replace("\n", " "))
+
+
+_SENTENCE_SEPARATORS = "。；;！!\n"
+
+
+def sentence_at(text: str, start: int, end: int, limit: int = 140) -> str:
+    """Return the sentence that contains text[start:end].
+
+    Evidence and the "优先/加分" judgement must both stay inside the sentence a
+    requirement belongs to. A fixed-width character window bleeds into the
+    neighbouring line, where an unrelated "优先" would downgrade a hard
+    constraint into a preference and silently drop it.
+    """
+    left = max(text.rfind(separator, 0, start) for separator in _SENTENCE_SEPARATORS)
+    right_candidates = [
+        position for separator in _SENTENCE_SEPARATORS
+        if (position := text.find(separator, end)) >= 0
+    ]
+    right = min(right_candidates) if right_candidates else len(text)
+    sentence = compact(text[left + 1:right])
+    return sentence[:limit] + ("…" if len(sentence) > limit else "")
+
+
+_CLAUSE_SEPARATORS = "，,、；;。！!\n"
+
+
+def clause_at(text: str, start: int, end: int, limit: int = 60) -> str:
+    """Return the comma-level clause containing the match.
+
+    "优先/加分" applies to the clause it sits in, not to the whole sentence:
+    in "可长期实习者优先，每周工作4天及以上" the preference belongs to the
+    first clause, and the 4-day requirement is still hard.
+    """
+    left = max(text.rfind(separator, 0, start) for separator in _CLAUSE_SEPARATORS)
+    right_candidates = [
+        position for separator in _CLAUSE_SEPARATORS
+        if (position := text.find(separator, end)) >= 0
+    ]
+    right = min(right_candidates) if right_candidates else len(text)
+    return compact(text[left + 1:right])[:limit]
 
 
 def extract_identity(jd_text: str) -> dict:
@@ -110,18 +169,22 @@ def _day_mentions(text: str) -> list[dict]:
     results = []
     patterns = [
         r"周实习天数[：:]?\s*([1-7])\s*天",
-        r"([1-7])\s*天\s*[/／]\s*周",
-        r"(?:每周|一周|每星期)[^。；\n]{0,25}?([1-7])\s*[-~～至]\s*([1-7])\s*(?:天|日)",
+        r"([1-7])\s*(?:[-~～至]\s*([1-7])\s*)?(?:天|日)\s*[/／]\s*周",
+        r"(?:每周|一周|每星期|出勤)[^。；\n]{0,25}?([1-7])\s*[-~～至]\s*([1-7])\s*(?:天|日)",
         r"(?:每周|一周|每星期)[^。；\n]{0,25}?(?:至少|不少于|不低于|保证|可实习)?\s*([1-7])\s*(?:天|日)(?:以上)?",
     ]
     for pattern in patterns:
         for match in re.finditer(pattern, text, re.I):
-            fragment = evidence_fragment(text, re.escape(match.group(0)), 20)
+            start, end = match.span()
+            sentence = sentence_at(text, start, end)
             low = int(match.group(1))
             high = int(match.group(2)) if match.lastindex and match.lastindex >= 2 and match.group(2) else low
-            preferred = bool(re.search(r"优先|加分", fragment))
+            preferred = bool(re.search(r"优先|加分", clause_at(text, start, end)))
             minimum = bool(re.search(r"至少|不少于|不低于|以上", match.group(0)))
-            results.append({"min": low, "max": high, "minimum": minimum, "preferred": preferred, "evidence": fragment})
+            results.append({
+                "min": low, "max": high, "minimum": minimum, "preferred": preferred,
+                "evidence": sentence, "span": (start, end),
+            })
     return results
 
 
@@ -133,10 +196,12 @@ def _month_mentions(text: str) -> list[dict]:
         r"(?:实习|持续|连续|保证|项目实践|实习期)[^。；\n]{0,30}?([2-9])\s*[-~～至]\s*([2-9])\s*个?月",
         r"(?:实习|持续|连续|保证|项目实践|实习期)[^。；\n]{0,30}?(?:至少|不少于|不低于)?\s*([2-9])\s*个?月(?:以上)?",
         r"(?:实习|持续|连续|保证|项目实践|实习期)[^。；\n]{0,30}?半年",
+        r"([2-9])\s*[-~～至]\s*([2-9])\s*个?月",
     ]
     for pattern in patterns:
         for match in re.finditer(pattern, text, re.I):
-            fragment = evidence_fragment(text, re.escape(match.group(0)), 20)
+            start, end = match.span()
+            sentence = sentence_at(text, start, end)
             if "半年" in match.group(0):
                 low = high = 6
             else:
@@ -145,10 +210,15 @@ def _month_mentions(text: str) -> list[dict]:
             results.append({
                 "min": low, "max": high,
                 "minimum": bool(re.search(r"至少|不少于|不低于|以上|最少", match.group(0))),
-                "preferred": bool(re.search(r"优先|加分", fragment)),
-                "evidence": fragment,
+                "preferred": bool(re.search(r"优先|加分", clause_at(text, start, end))),
+                "evidence": sentence,
+                "span": (start, end),
             })
     return results
+
+
+_DAY_HINT = re.compile(r"(?:每周|一周|每星期|周)[^。；\n]{0,12}(?:天|日)|出勤|坐班|到岗")
+_MONTH_HINT = re.compile(r"(?:实习|持续|连续|周期|保证)[^。；\n]{0,15}(?:个?月)|最少\s*[2-9]\s*个?月")
 
 
 def extract_schedule(jd_text: str, profile: CandidateProfile) -> dict:
@@ -162,6 +232,7 @@ def extract_schedule(jd_text: str, profile: CandidateProfile) -> dict:
     required_months = summary_months["min"] if summary_months else (hard_months[0]["min"] if hard_months else None)
     day_conflict = len({(x["min"], x["max"]) for x in hard_days}) > 1
     month_conflict = len({(x["min"], x["max"]) for x in hard_months}) > 1
+    candidate_min_months = profile.min_months if profile.min_months is not None else 0
 
     day_status = "未提及"
     if required_days is not None:
@@ -172,16 +243,24 @@ def extract_schedule(jd_text: str, profile: CandidateProfile) -> dict:
             day_status = "需核实"
         else:
             day_status = "不符合"
+    elif _DAY_HINT.search(jd_text):
+        day_status = "需核实"
 
     month_status = "未提及"
     if required_months is not None:
-        alternatives = [x for x in hard_months if x["min"] <= profile.max_months and x["max"] >= profile.min_months]
-        if profile.min_months <= required_months <= profile.max_months and not month_conflict:
+        alternatives = [x for x in hard_months if x["min"] <= profile.max_months and x["max"] >= candidate_min_months]
+        if profile.min_months is None:
+            fits = required_months <= profile.max_months
+        else:
+            fits = profile.min_months <= required_months <= profile.max_months
+        if fits and not month_conflict:
             month_status = "符合"
         elif alternatives:
             month_status = "需核实"
         else:
             month_status = "不符合"
+    elif _MONTH_HINT.search(jd_text):
+        month_status = "需核实"
 
     evidence = "；".join(dict.fromkeys([item["evidence"] for item in [*days, *months] if item["evidence"]]))[:420]
     return {
@@ -198,11 +277,60 @@ def _dedupe(items: list[dict]) -> list[dict]:
     seen = set()
     result = []
     for item in items:
-        key = (item["min"], item["max"], item["preferred"], item["evidence"])
+        key = item["span"]
         if key not in seen:
             seen.add(key)
             result.append(item)
     return result
+
+
+BAD_CASE_BOUNDARY = "边界分类"
+BAD_CASE_SUMMARY_CONFLICT = "摘要正文冲突"
+BODY_START = re.compile(r"(?:职位描述|岗位职责|工作职责|职位职责|主要职责|工作内容|任职要求|岗位要求|职位要求|任职资格|我们希望|我们希望你)")
+
+
+def _split_summary_body(jd_text: str) -> tuple[str, str]:
+    """Separate the platform summary block from the hand-written JD body."""
+    match = BODY_START.search(jd_text)
+    if not match:
+        return jd_text, ""
+    return jd_text[:match.start()], jd_text[match.start():]
+
+
+def _lowest_requirement(mentions: list[dict]) -> int | None:
+    """Lowest stated value for a dimension.
+
+    Unlike the hard-constraint path this deliberately keeps 加分项 mentions: a
+    preference that contradicts the platform summary is still a discrepancy the
+    candidate has to confirm before applying.
+    """
+    return min((item["min"] for item in mentions), default=None)
+
+
+def detect_summary_body_conflict(jd_text: str) -> dict:
+    """Flag disagreement between the platform summary line and the JD body.
+
+    Platforms auto-generate a summary such as "5天／周 实习3个月" that frequently
+    disagrees with the hand-written body. We only flag it when both sides state a
+    value for the same dimension and the summary differs from the body's minimum
+    requirement — that is the case a candidate has to confirm before applying.
+
+    Calibrated on the 26-sample external set. Degree is deliberately excluded:
+    the gold labels do not treat summary/body degree differences as a conflict.
+    """
+    summary, body = _split_summary_body(jd_text)
+    if not summary.strip() or not body.strip():
+        return {"conflict": False, "dimensions": [], "evidence": ""}
+    dimensions = []
+    evidence = []
+    for label, extractor in (("每周出勤", _day_mentions), ("实习周期", _month_mentions)):
+        summary_value = _lowest_requirement(_dedupe(extractor(summary)))
+        body_value = _lowest_requirement(_dedupe(extractor(body)))
+        if summary_value is None or body_value is None or summary_value == body_value:
+            continue
+        dimensions.append(label)
+        evidence.append(f"{label}：摘要为 {summary_value}，正文最低要求为 {body_value}")
+    return {"conflict": bool(dimensions), "dimensions": dimensions, "evidence": "；".join(evidence)}
 
 
 def analyze_school(jd_text: str, profile: CandidateProfile) -> dict:
@@ -388,18 +516,60 @@ def classify_role(title: str, body: str) -> tuple[str, str, bool]:
     return family, direction, boundary
 
 
+_ASCII_SKILL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .+/#&-]*$")
+
+
+def _skill_pattern(term: str) -> str:
+    pattern = re.escape(term)
+    return pattern.replace(r"\ ", r"\s*").replace(" ", r"\s*")
+
+
 def extract_skills(text: str) -> list[str]:
-    normalized = text.lower().replace(" ", "")
-    return [term for term in SKILL_TERMS if term.lower().replace(" ", "") in normalized]
+    """Match skills without the single-letter false positives of plain substring search.
+
+    ASCII terms are matched on word boundaries so "R" no longer fires inside
+    "Product" or "PRD"; single-letter terms are case-sensitive so a stray "r"
+    is ignored. Chinese terms keep substring matching, where boundaries do not apply.
+    """
+    cleaned = text.replace("\u200b", "")
+    found = []
+    for term in SKILL_TERMS:
+        if term in found:
+            continue
+        if _ASCII_SKILL.match(term):
+            flags = 0 if len(term) == 1 else re.I
+            if re.search(rf"(?<![A-Za-z0-9]){_skill_pattern(term)}(?![A-Za-z0-9])", cleaned, flags):
+                found.append(term)
+        elif term in cleaned:
+            found.append(term)
+    return found
 
 
-def extract_deliverables(jd_text: str) -> list[str]:
-    sentences = [compact(item) for item in re.split(r"[。；\n]|(?=\d+[.、])", jd_text) if len(compact(item)) >= 12]
-    action_terms = ["负责", "参与", "搭建", "建设", "分析", "设计", "输出", "推动", "优化", "制定", "维护", "跟踪", "沉淀", "构建"]
-    output_terms = ["报告", "方案", "产品", "原型", "指标", "看板", "测试集", "知识库", "工作流", "策略", "数据", "模型", "文档", "结论", "建议"]
+DUTY_HEADINGS = re.compile(r"(?:岗位职责|工作职责|职位职责|主要职责|工作内容|职位描述|职责描述|工作描述|你将负责|你将参与|工作任务|工作范围)")
+REQUIREMENT_HEADINGS = re.compile(r"(?:任职要求|岗位要求|职位要求|任职资格|任职条件|岗位条件|申请要求|资格要求|我们希望|我们希望你|你需要|要求如下|加分项)")
+_NUMBER_PREFIX = re.compile(r"^\s*(?:\d+\s*[.．、)）]|[-–—•·*])\s*")
+_ACTION_TERMS = ["负责", "参与", "搭建", "建设", "分析", "设计", "输出", "推动", "优化", "制定", "维护", "跟踪", "沉淀", "构建"]
+_OUTPUT_TERMS = ["报告", "方案", "产品", "原型", "指标", "看板", "测试集", "知识库", "工作流", "策略", "数据", "模型", "文档", "结论", "建议"]
+
+
+def _duty_scope(jd_text: str) -> str:
+    """Trim the JD down to the responsibility block, so requirements never leak into deliverables."""
+    scope = jd_text
+    requirement = REQUIREMENT_HEADINGS.search(scope)
+    if requirement:
+        scope = scope[:requirement.start()]
+    duty = DUTY_HEADINGS.search(scope)
+    if duty:
+        scope = scope[duty.end():]
+    return scope
+
+
+def _score_deliverables(scope: str) -> list[str]:
+    sentences = [compact(_NUMBER_PREFIX.sub("", item)) for item in re.split(r"[。；\n]|(?=\d+[.、])", scope)]
+    sentences = [item for item in sentences if len(item) >= 12]
     scored = []
     for index, sentence in enumerate(sentences):
-        score = sum(term in sentence for term in action_terms) * 2 + sum(term in sentence for term in output_terms)
+        score = sum(term in sentence for term in _ACTION_TERMS) * 2 + sum(term in sentence for term in _OUTPUT_TERMS)
         if score:
             scored.append((score, -index, sentence[:150]))
     scored.sort(reverse=True)
@@ -410,6 +580,14 @@ def extract_deliverables(jd_text: str) -> list[str]:
         if len(result) == 4:
             break
     return result
+
+
+def extract_deliverables(jd_text: str) -> list[str]:
+    for scope in (_duty_scope(jd_text), jd_text):
+        result = _score_deliverables(scope)
+        if result:
+            return result
+    return []
 
 
 def find_similar_cases(jd_text: str, cases: list[dict], limit: int = 3) -> list[dict]:
@@ -435,13 +613,65 @@ def find_similar_cases(jd_text: str, cases: list[dict], limit: int = 3) -> list[
     return sorted(ranked, key=lambda item: item["相似度"], reverse=True)[:limit]
 
 
+def _deliverable_coverage(deliverables: list[str], resume_text: str) -> float | None:
+    """Rough check of how much of the JD's responsibility surface the resume already touches."""
+    if not deliverables or not resume_text.strip():
+        return None
+    pool = SKILL_TERMS + ["数据", "分析", "报告", "方案", "产品", "原型", "指标", "看板", "用户", "模型",
+                          "测试", "知识库", "工作流", "运营", "策略", "文档", "结论", "建议", "调研", "研究"]
+    resume_lower = resume_text.lower()
+    covered = total = 0
+    for item in deliverables:
+        item_terms = [term for term in pool if term.lower() in item.lower()]
+        if not item_terms:
+            continue
+        total += 1
+        if any(term.lower() in resume_lower for term in item_terms):
+            covered += 1
+    return covered / total if total else None
+
+
+def _fit_result(
+    jd_skills: list[str],
+    matched: list[str],
+    deliverables: list[str],
+    resume_text: str,
+    blockers: list[dict],
+    verifications: list[dict],
+) -> tuple[int | None, dict, str]:
+    """Score only what can actually be measured, and say so when it cannot."""
+    if blockers:
+        return None, {}, "存在明确硬约束不满足，不进入评分。"
+    if not resume_text.strip():
+        return None, {}, "尚未上传简历，能力匹配无法评估，因此不给出综合适配度。"
+    skill_score = round(100 * len(matched) / len(jd_skills)) if jd_skills else None
+    parts: list[tuple[str, float, int]] = []
+    if skill_score is not None:
+        parts.append(("技能匹配度", 0.7, skill_score))
+    coverage = _deliverable_coverage(deliverables, resume_text)
+    if coverage is not None:
+        parts.append(("交付物覆盖", 0.3, round(coverage * 100)))
+    if not parts:
+        return None, {}, "JD 中未识别到可用于打分的技能或交付物。"
+    weight_total = sum(weight for _, weight, _ in parts)
+    score = round(sum(weight * value for _, weight, value in parts) / weight_total)
+    note = ""
+    if verifications:
+        score = min(score, 68)
+        note = "仍有需核实的硬约束，分数已按上限收敛。"
+    breakdown = {name: {"权重": round(weight / weight_total * 100), "得分": value} for name, weight, value in parts}
+    return score, breakdown, note
+
+
 def analyze_jd(jd_text: str, profile: CandidateProfile, resume_text: str = "") -> dict:
     identity = extract_identity(jd_text)
     family, direction, boundary = classify_role(identity["role_title"], jd_text)
     schedule = extract_schedule(jd_text, profile)
+    day_value = schedule["weekly_days"] if schedule["weekly_days"] is not None else ("未解析出具体天数" if schedule["day_status"] == "需核实" else "未提及")
+    month_value = schedule["minimum_months"] if schedule["minimum_months"] is not None else ("未解析出具体月数" if schedule["month_status"] == "需核实" else "未提及")
     constraints = [
-        _constraint("每周出勤", schedule["day_status"], f"个人最多{profile.available_days}天/周；岗位识别值为{schedule['weekly_days'] or '未提及'}", schedule["evidence"]),
-        _constraint("实习周期", schedule["month_status"], f"个人可实习{profile.min_months}-{profile.max_months}个月；岗位识别值为{schedule['minimum_months'] or '未提及'}", schedule["evidence"]),
+        _constraint("每周出勤", schedule["day_status"], f"个人最多{profile.available_days}天/周；岗位识别值为{day_value}", schedule["evidence"]),
+        _constraint("实习周期", schedule["month_status"], f"个人可实习{months_span(profile)}；岗位识别值为{month_value}", schedule["evidence"]),
         analyze_school(jd_text, profile),
         analyze_major(jd_text, profile),
         analyze_graduation(jd_text, profile),
@@ -450,20 +680,24 @@ def analyze_jd(jd_text: str, profile: CandidateProfile, resume_text: str = "") -
     verifications = [row for row in constraints if row["结论"] == "需核实"]
     decision = "不建议投递" if blockers else "投递前需确认" if verifications else "可以投递"
 
+    bad_case = detect_summary_body_conflict(jd_text)
+    bad_case_types = []
+    if bad_case["conflict"]:
+        bad_case_types.append(BAD_CASE_SUMMARY_CONFLICT)
+    if boundary:
+        bad_case_types.append(BAD_CASE_BOUNDARY)
+    bad_case_type = "；".join(bad_case_types) if bad_case_types else "无"
+
     jd_skills = extract_skills(jd_text)
-    profile_text = f"{profile.skills}\n{resume_text}"
-    owned_skills = extract_skills(profile_text)
+    owned_skills = extract_skills(f"{profile.skills}\n{resume_text}")
     matched = [skill for skill in jd_skills if skill in owned_skills]
     missing = [skill for skill in jd_skills if skill not in owned_skills]
+    deliverables = extract_deliverables(jd_text)
     skill_score = round(100 * len(matched) / len(jd_skills)) if jd_skills else None
-    base_score = 70 if not resume_text else 60 + round((skill_score or 0) * 0.4)
-    if blockers:
-        fit_score = min(base_score, 45)
-    elif verifications:
-        fit_score = min(base_score, 68)
-    else:
-        fit_score = min(base_score + 12, 95)
+    fit_score, fit_breakdown, fit_note = _fit_result(jd_skills, matched, deliverables, resume_text, blockers, verifications)
     risks = [row["说明"] for row in blockers + verifications]
+    if bad_case["conflict"]:
+        risks.append(f"摘要与正文的时间要求不一致（{bad_case['evidence']}），投递前需向招聘方确认。")
     if missing:
         risks.append(f"简历中暂未识别：{'、'.join(missing[:6])}")
     strengths = matched[:8]
@@ -486,11 +720,16 @@ def analyze_jd(jd_text: str, profile: CandidateProfile, resume_text: str = "") -
         "sub_direction": direction,
         "boundary": boundary,
         "decision": decision,
+        "bad_case_type": bad_case_type,
+        "bad_case_binary": bool(bad_case_types),
+        "bad_case_evidence": bad_case["evidence"],
         "fit_score": fit_score,
+        "fit_breakdown": fit_breakdown,
+        "fit_note": fit_note,
         "constraints": constraints,
         "schedule": schedule,
         "jd_skills": jd_skills,
-        "deliverables": extract_deliverables(jd_text),
+        "deliverables": deliverables,
         "matched_skills": matched,
         "missing_skills": missing,
         "skill_score": skill_score,
@@ -515,7 +754,7 @@ def build_resume_prompt(jd_text: str, profile: CandidateProfile, resume_text: st
 我的基本信息：
 - 学校：{profile.school}（{profile.school_tier}）
 - 专业：{profile.major}，{profile.degree}，{profile.graduation_year}届
-- 时间：{profile.arrival}，每周最多{profile.available_days}天，可连续{profile.min_months}-{profile.max_months}个月
+- 时间：{profile.arrival}，每周最多{profile.available_days}天，可实习{months_span(profile)}
 - 已知技能：{profile.skills}
 
 系统初步诊断：

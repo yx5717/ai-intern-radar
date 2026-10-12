@@ -33,3 +33,11 @@ $env:AI_RADAR_API_KEY="你的密钥"
 ## 方法
 
 外部样本先由 `rule-baseline-v1` 生成预测并记录哈希，随后才建立人工金标准。被冻结预测不会根据外部答案回写，因此网页中的外部指标可作为跨平台泛化结果，而不是训练集回归成绩。
+
+需要区分的是：冻结预测来自 `scripts/baseline_rules_v1.mjs`（Node 实现），而网页运行时使用的是 `radar_core.py`（Python 实现）。两者是独立实现，外部指标只描述前者，不代表网页引擎的表现。
+
+`scripts/evaluate_python_engine.py` 会在同一批 26 条样本、同一画像下评测 Python 引擎，产出 `data/python_engine_eval_v1.json` 与逐条预测 `data/python_engine_predictions_v1.jsonl`。该产物显式标注为 `internal_regression_not_blind`：Python 引擎是在金标准建立之后编写的，作者已见过答案，因此**只用于回归与迭代，不具备盲测意义**。项目唯一可对外的盲测成绩仍是 `rule-baseline-v1`。
+
+比较前会把金标准中的「职能支持/边界岗位」折叠为当前词表的「职能支持/其他岗位」（`ROLE_ALIASES`），否则同一概念的两种写法会被直接判错。
+
+引擎会给出两类 Bad Case 标记：`边界分类`（岗位归类处于两个方向的边界）和 `摘要正文冲突`（平台自动生成的摘要行与正文最低要求在天数或月数上不一致，例如摘要写「5天／周」而正文写「每周4天以上」）。前者依赖岗位分类质量，后者为独立规则，在外部集上 7 条冲突全部命中且无误报。
