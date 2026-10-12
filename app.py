@@ -1,6 +1,7 @@
 import html
 import json
 import os
+import re
 from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
@@ -9,7 +10,16 @@ import pandas as pd
 import streamlit as st
 
 from llm_client import PROVIDERS, chat_completion, normalize_provider_config, test_connection
-from radar_core import CandidateProfile, ROLE_DESCRIPTIONS, ROLE_ORDER, analyze_jd, build_resume_prompt, months_span
+from radar_core import (
+    CandidateProfile,
+    ROLE_DESCRIPTIONS,
+    ROLE_ORDER,
+    analyze_jd,
+    build_catalog_csv,
+    build_report_markdown,
+    build_resume_prompt,
+    months_span,
+)
 from resume_parser import parse_resume
 from storage import UserStore
 
@@ -55,6 +65,70 @@ def _h(value) -> str:
 
 def metric_pct(value: float) -> str:
     return f"{value * 100:.1f}%"
+
+
+def page_header(title: str) -> None:
+    """页面头。
+
+    曾经在每个标题上方压一行英文上标签（DASHBOARD / PROFILE / PROJECT……），
+    但侧栏已经标明了当前位置，那行字不承担任何信息，只是把页面做出「设计感」。
+    这种「主标题 + 大写拉丁眉标」正是最典型的模板味，所以整个删掉。
+    """
+    st.title(title)
+
+
+def render_barlist(pairs: list[tuple[str, int]], alt: bool = False) -> None:
+    """自绘条形图：无坐标轴、无网格线，标签右对齐、数值等宽。"""
+    if not pairs:
+        return
+    peak = max(value for _, value in pairs) or 1
+    rows = "".join(
+        f'<div class="row"><div class="k">{_h(label)}</div>'
+        f'<div class="track"><div class="fill" style="width:{value / peak * 100:.1f}%"></div></div>'
+        f'<div class="v">{value}</div></div>'
+        for label, value in pairs
+    )
+    st.markdown(f'<div class="barlist{" alt" if alt else ""}">{rows}</div>', unsafe_allow_html=True)
+
+
+_BATCH_SEPARATOR = re.compile(r"^[ \t]*(?:-{3,}|={3,}|\*{3,}|#{3,})[ \t]*$", re.MULTILINE)
+MIN_JD_LENGTH = 30
+
+
+def _split_batch_raw(text: str) -> list[str]:
+    """只做切分与长度过滤，不去重。"""
+    if _BATCH_SEPARATOR.search(text):
+        parts = _BATCH_SEPARATOR.split(text)
+    else:
+        parts = re.split(r"\n[ \t]*\n[ \t]*\n+", text)
+    return [part.strip() for part in parts if len(part.strip()) >= MIN_JD_LENGTH]
+
+
+def split_batch_jds(text: str) -> list[str]:
+    """把批量粘贴的文本切成多条 JD。
+
+    优先按独占一行的分隔符（--- / === / *** / ###）切分；没有分隔符时退回到
+    「连续 3 个以上空行」。两种都做长度过滤，避免把碎片当成岗位。
+
+    最后按内容哈希去重：入库本身是按 JD 内容哈希去重的（见 save_user_job），
+    如果这里不去重，按钮上写「3 条」而实际只落库 2 条，用户会以为出错。
+    """
+    seen, unique = set(), []
+    for item in _split_batch_raw(text):
+        digest = sha256(item.encode("utf-8")).hexdigest()
+        if digest not in seen:
+            seen.add(digest)
+            unique.append(item)
+    return unique
+
+
+def dropped_duplicate_count(text: str) -> int:
+    """本次粘贴里被合并掉的重复条数，用于如实告知用户。"""
+    return len(_split_batch_raw(text)) - len(split_batch_jds(text))
+
+
+def safe_filename(value: str) -> str:
+    return re.sub(r'[\\/:*?"<>|\s]+', "_", value).strip("_")[:80] or "report"
 
 
 def _is_blank(value) -> bool:
@@ -391,7 +465,13 @@ def render_analysis_report(
     with fit:
         st.subheader("能力与经历")
         st.write("**已匹配**")
-        st.write("、".join(analysis["matched_skills"]) or "上传简历后才能进行可靠匹配")
+        # 简历已上传却一条都没匹配上时，再提示「上传简历后才能匹配」就是误导。
+        if analysis["matched_skills"]:
+            st.write("、".join(analysis["matched_skills"]))
+        elif analysis_resume.strip():
+            st.write("这份简历里没有识别到与 JD 明确对应的技能，建议人工比对职责段落")
+        else:
+            st.write("上传简历后才能进行可靠匹配")
         st.write("**JD要求但简历中暂未识别**")
         st.write("、".join(analysis["missing_skills"]) or "没有识别到明确技能缺口")
         st.write("**主要风险**")
@@ -407,6 +487,15 @@ def render_analysis_report(
     st.subheader("简历修改提示词")
     st.caption("可直接复制；已包含硬约束、JD、个人画像和防止虚构的要求。")
     st.code(prompt, language="text", line_numbers=False)
+    export_col, _ = st.columns([1, 2])
+    export_col.download_button(
+        "导出这份诊断报告",
+        data=build_report_markdown(analysis, jd_text, analysis_profile),
+        file_name=f"诊断报告_{safe_filename(analysis['company'])}_{safe_filename(analysis['role_title'])}.md",
+        mime="text/markdown",
+        width="stretch",
+        help="导出为 Markdown，包含硬约束、能力匹配、交付物、建议动作与 JD 原文。",
+    )
     if not allow_api:
         return
     with st.expander("使用我的 API 生成深度建议"):
@@ -431,144 +520,8 @@ def render_analysis_report(
 
 
 st.set_page_config(page_title="AI 实习雷达", page_icon="◎", layout="wide", initial_sidebar_state="auto")
-st.markdown("""
-<style>
-/* ===== 设计令牌：深色 · 专业 · 数据风 ===== */
-:root{
-  --bg:#0B0F14; --surface:#111823; --surface-2:#161E2A; --surface-3:#1B2431;
-  --line:#222C3A; --line-2:#2E3A4B;
-  --text:#E6EDF3; --dim:#94A2B2; --faint:#5F6C7B;
-  --accent:#4D9EFF; --accent-soft:rgba(77,158,255,.10); --accent-line:rgba(77,158,255,.40);
-  --ok:#46C97E; --warn:#E3B341; --bad:#F2727B;
-  --mono:"JetBrains Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
-  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
-}
-html,body,.stApp,[data-testid="stAppViewContainer"]{ background:var(--bg); color:var(--text); font-family:var(--sans); }
-[data-testid="stHeader"]{ background:transparent; }
-.block-container{ padding-top:1.6rem; padding-bottom:3.5rem; max-width:1380px; }
-::selection{ background:var(--accent-soft); }
-::-webkit-scrollbar{ width:10px; height:10px; }
-::-webkit-scrollbar-track{ background:transparent; }
-::-webkit-scrollbar-thumb{ background:var(--line-2); border-radius:6px; border:2px solid var(--bg); }
-
-/* ===== 标题层级：小一号、紧、左侧刻度条 ===== */
-h1,h2,h3,h4{ color:var(--text); letter-spacing:0 !important; }
-h1{ font-size:1.5rem !important; font-weight:650 !important; margin:0 0 .1rem !important; }
-h2{ font-size:.98rem !important; font-weight:600 !important; margin:1.4rem 0 .5rem !important;
-    padding-left:9px; border-left:2px solid var(--accent); line-height:1.3; }
-h3{ font-size:.94rem !important; font-weight:600 !important; margin:.9rem 0 .35rem !important; }
-.caption{ color:var(--dim); font-size:.85rem; line-height:1.6; margin:-2px 0 14px; }
-
-/* ===== 侧栏 ===== */
-[data-testid="stSidebar"]{ background:var(--surface); border-right:1px solid var(--line); }
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p{ color:var(--dim); font-size:.84rem; }
-[data-testid="stSidebar"] hr{ margin:12px 0 !important; }
-.brand{ display:flex; align-items:center; gap:9px; font-weight:700; font-size:1rem; color:var(--text); margin-bottom:2px; }
-.brand .dot{ width:7px; height:7px; border-radius:2px; background:var(--accent); box-shadow:0 0 10px var(--accent); flex:none; }
-.kv{ display:flex; justify-content:space-between; gap:12px; font-size:.79rem; padding:5px 0; border-bottom:1px dashed var(--line); }
-.kv .k{ color:var(--faint); flex:none; }
-.kv .v{ color:var(--text); text-align:right; font-family:var(--mono); }
-/* 导航：用背景高亮表达选中态，隐藏单选圆点 */
-[data-testid="stSidebar"] [role="radiogroup"]{ gap:2px; }
-[data-testid="stSidebar"] [data-testid="stRadioOption"]{
-  padding:7px 10px; border-radius:6px; border:1px solid transparent; transition:background .12s,border-color .12s;
-}
-[data-testid="stSidebar"] [data-testid="stRadioOption"]:hover{ background:var(--surface-2); }
-[data-testid="stSidebar"] [data-testid="stRadioOption"][data-selected="true"]{
-  background:rgba(77,158,255,.16); border-color:var(--accent-line);
-}
-[data-testid="stSidebar"] [data-testid="stRadioOption"][data-selected="true"] p{ color:var(--text) !important; font-weight:600; }
-[data-testid="stSidebar"] [data-testid="stRadioOption"] > div > div:first-child{ display:none; }
-
-/* ===== 指标卡：等宽数字 + 左侧刻度 ===== */
-[data-testid="stMetric"]{ position:relative; overflow:hidden; background:var(--surface);
-  border:1px solid var(--line); border-radius:8px; padding:13px 15px; min-height:92px; }
-[data-testid="stMetric"]::before{ content:""; position:absolute; left:0; top:0; bottom:0; width:2px;
-  background:var(--accent); opacity:.5; }
-[data-testid="stMetricLabel"] p{ color:var(--faint) !important; font-size:.74rem !important; letter-spacing:.05em; }
-[data-testid="stMetricValue"]{ font-family:var(--mono); font-size:1.42rem !important; font-weight:600 !important; color:var(--text) !important; }
-/* 说明文字不是涨跌值，去掉绿/红徽章底色，统一降为中性灰 */
-[data-testid="stMetricDelta"]{ font-size:.74rem !important; color:var(--faint) !important; background:transparent !important; }
-[data-testid="stMetricDelta"] *{ color:var(--faint) !important; background:transparent !important; }
-[data-testid^="stMetricDeltaIcon"]{ display:none !important; }
-
-/* ===== 结论横幅 ===== */
-.decision{ position:relative; overflow:hidden; background:var(--surface); border:1px solid var(--line);
-  border-radius:8px; padding:15px 18px; margin:2px 0 14px; }
-.decision::before{ content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--accent); }
-.decision.pass::before{ background:var(--ok); }
-.decision.verify::before{ background:var(--warn); }
-.decision.fail::before{ background:var(--bad); }
-.decision .label{ color:var(--faint); font-size:.72rem; letter-spacing:.1em; }
-.decision .value{ font-family:var(--mono); font-size:1.4rem; font-weight:700; margin:4px 0 3px; }
-.decision .meta{ color:var(--dim); font-size:.84rem; }
-
-/* ===== 硬约束行 ===== */
-.constraint{ display:flex; justify-content:space-between; gap:16px; align-items:flex-start;
-  border-top:1px solid var(--line); padding:10px 2px 8px; }
-.constraint strong{ font-size:.88rem; font-weight:600; color:var(--text); }
-.constraint span{ display:block; color:var(--faint); font-size:.79rem; margin-top:3px; line-height:1.5; }
-.constraint b{ white-space:nowrap; font-family:var(--mono); font-size:.82rem; font-weight:600; }
-.pass{ color:var(--ok); } .verify{ color:var(--warn); } .fail{ color:var(--bad); }
-
-/* ===== 提示条 / 步骤条 / 对比卡 ===== */
-.tagline{ background:var(--surface-2); border:1px solid var(--line); border-left:3px solid var(--accent);
-  border-radius:6px; padding:12px 16px; margin:12px 0 18px; }
-.tagline strong{ display:block; margin-bottom:4px; font-size:.72rem; letter-spacing:.1em; color:var(--accent); }
-.flow{ display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--line);
-  border:1px solid var(--line); border-radius:8px; overflow:hidden; margin:6px 0 4px; }
-.flow .step{ background:var(--surface); padding:14px 16px; }
-.flow .step .n{ font-family:var(--mono); font-size:.7rem; letter-spacing:.12em; color:var(--accent); }
-.flow .step .t{ font-weight:600; font-size:.9rem; margin:6px 0 4px; color:var(--text); }
-.flow .step .d{ color:var(--faint); font-size:.78rem; line-height:1.55; }
-.pair{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:8px 0 12px; }
-.pair .card{ background:var(--surface-2); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
-.pair .card.ok{ border-left:3px solid var(--ok); }
-.pair .card.mut{ border-left:3px solid var(--line-2); }
-.pair .card .t{ font-weight:600; font-size:.87rem; margin-bottom:5px; color:var(--text); }
-.pair .card .d{ color:var(--faint); font-size:.78rem; line-height:1.6; }
-
-/* ===== 组件：表格 / 按钮 / 标签页 / 折叠面板 / 输入 ===== */
-[data-testid="stDataFrame"]{ border:1px solid var(--line); border-radius:8px; overflow:hidden; }
-.stButton button,.stFormSubmitButton button{ border-radius:6px; border:1px solid var(--line-2);
-  background:var(--surface-2); color:var(--text); font-weight:500; transition:background .12s,border-color .12s; }
-.stButton button:hover,.stFormSubmitButton button:hover{ background:var(--surface-3); border-color:var(--accent-line); color:var(--text); }
-.stButton button[data-testid="stBaseButton-primary"],.stButton button[kind="primary"],
-.stFormSubmitButton button[data-testid="stBaseButton-primaryFormSubmit"],.stFormSubmitButton button[kind="primaryFormSubmit"]{
-  background:var(--accent); border-color:var(--accent); color:#08131F; font-weight:600; }
-.stButton button[data-testid="stBaseButton-primary"]:hover,.stButton button[kind="primary"]:hover,
-.stFormSubmitButton button[data-testid="stBaseButton-primaryFormSubmit"]:hover,.stFormSubmitButton button[kind="primaryFormSubmit"]:hover{
-  background:#6BB0FF; border-color:#6BB0FF; color:#08131F; }
-.st-key-logout_button button{ background:transparent !important; border-color:var(--line-2) !important; color:var(--dim) !important; }
-.st-key-logout_button button:hover{ background:rgba(242,114,123,.10) !important; border-color:var(--bad) !important; color:var(--bad) !important; }
-.stTabs [data-baseweb="tab-list"]{ gap:4px; border-bottom:1px solid var(--line); }
-.stTabs [data-baseweb="tab"]{ padding:8px 14px; font-size:.86rem; color:var(--dim); }
-.stTabs [aria-selected="true"]{ color:var(--text); }
-[data-testid="stExpander"]{ border:1px solid var(--line) !important; border-radius:8px !important; background:var(--surface); }
-[data-testid="stTextInput"] input,[data-testid="stTextArea"] textarea,[data-baseweb="select"]>div{
-  background:var(--surface-2) !important; border-color:var(--line-2) !important; color:var(--text) !important; border-radius:6px !important; }
-[data-testid="stFileUploaderDropzone"]{ background:var(--surface-2); border:1px dashed var(--line-2); border-radius:8px; }
-/* 提示框统一降噪：中性底 + 彩色左轨，避免整块高饱和色块打断阅读。
-   彩色底实际画在内层 stAlertContainer 上，必须一并置空。 */
-[data-testid="stAlert"]{ background:var(--surface-2) !important; border:1px solid var(--line-2) !important;
-  border-left:3px solid var(--line-2) !important; border-radius:8px; }
-[data-testid="stAlertContainer"]{ background:transparent !important; }
-[data-testid="stAlert"]:has([data-testid="stAlertContentSuccess"]){ border-left-color:var(--ok) !important; }
-[data-testid="stAlert"]:has([data-testid="stAlertContentWarning"]){ border-left-color:var(--warn) !important; }
-[data-testid="stAlert"]:has([data-testid="stAlertContentError"]){ border-left-color:var(--bad) !important; }
-[data-testid="stAlert"]:has([data-testid="stAlertContentInfo"]){ border-left-color:var(--accent) !important; }
-[data-testid="stAlert"] [data-testid="stMarkdownContainer"] *{ color:var(--text) !important; }
-[data-testid="stCode"]{ border:1px solid var(--line); border-radius:8px; }
-code,pre,.stCode{ font-family:var(--mono) !important; }
-
-/* ===== 窄屏 ===== */
-@media (max-width:820px){
-  .block-container{ padding-left:1rem; padding-right:1rem; }
-  h1{ font-size:1.3rem !important; }
-  .flow,.pair{ grid-template-columns:1fr; }
-}
-</style>
-""", unsafe_allow_html=True)
+THEME_CSS = (ROOT / "theme.css").read_text(encoding="utf-8")
+st.markdown(f"<style>{THEME_CSS}</style>", unsafe_allow_html=True)
 
 if st.session_state.get("auth_user_id") and not st.session_state.get("auth_mode"):
     st.session_state.auth_mode = "account"
@@ -658,7 +611,7 @@ with st.sidebar:
     st.divider()
     account_label = f"账户：{st.session_state.auth_username}" if st.session_state.auth_mode == "account" else "游客模式 · 数据不会保存"
     st.caption(account_label)
-    if st.button("退出登录", key="logout_button", width="stretch"):
+    if st.button("退出登录", key="logout_button"):
         sign_out()
     sidebar_api_status = st.empty()
 
@@ -667,9 +620,14 @@ profile_ready = profile_is_complete()
 catalog_df, catalog_details = build_catalog(profile, st.session_state.resume_text, st.session_state.user_jobs) if profile_ready else (pd.DataFrame(columns=CATALOG_COLUMNS), {})
 
 if page == "求职首页":
-    st.title("今天先投什么")
+    page_header("今天先投什么")
     if profile_ready:
-        st.markdown(f'<div class="caption">{profile.school} · {profile.major} · {profile.graduation_year}届 · 每周最多{profile.available_days}天 · 可实习{months_span(profile)}</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="caption">{profile.school} · {profile.major} · {profile.graduation_year} 届 · '
+            f'每周最多 {profile.available_days} 天 · 可实习 {months_span(profile)}<br>'
+            f'下面每条结论都同时检查出勤、周期、学校层次、专业和毕业年份。</div>',
+            unsafe_allow_html=True,
+        )
     else:
         st.markdown('<div class="caption">完成求职画像后，这里会按你的真实条件生成投递优先级。</div>', unsafe_allow_html=True)
     suitable = catalog_df[catalog_df["综合结论"] == "可以投递"]
@@ -687,50 +645,64 @@ if page == "求职首页":
         next_step = "个人资料已就绪。打开“智能诊断”粘贴 JD；如需网页直接生成深度分析，可再配置大模型 API。"
     else:
         next_step = "先到“我的资料”完善求职画像并上传简历。大模型 API 是可选项，不配置也可以完成岗位诊断。"
-    st.markdown(f'<div class="tagline"><strong>你的下一步</strong>{next_step}</div>', unsafe_allow_html=True)
-    left, right = st.columns([1.45, 1])
-    with left:
-        st.subheader("优先处理")
-        if suitable.empty:
-            st.info("还没有可直接投递的岗位。到“智能诊断”粘贴一条 JD，结果会自动进入这里。")
-        else:
-            priority = suitable.sort_values("适配度", ascending=False).head(12).copy()
-            priority["适配度"] = priority["适配度"].map(fit_cell)
-            # 首页是短名单，只保留决策必需的 4 列；完整约束在“岗位库”里看。
-            st.dataframe(
-                priority[["公司", "岗位名称", "岗位大类", "适配度"]], width="stretch", hide_index=True,
-                height=min(415, 58 + 35 * len(priority)),
-                column_config={
-                    "公司": st.column_config.TextColumn(width=88),
-                    "岗位名称": st.column_config.TextColumn(width=206),
-                    "岗位大类": st.column_config.TextColumn(width=138),
-                    "适配度": st.column_config.TextColumn(width=66),
-                },
-            )
-    with right:
-        st.subheader("你的匹配方向")
-        role_counts = suitable["岗位大类"].value_counts().reindex(ROLE_ORDER, fill_value=0)
-        role_counts.index = [ROLE_CHART_LABELS[role] for role in role_counts.index]
-        if role_counts.sum() > 0:
-            st.bar_chart(role_counts, horizontal=True, color="#2878B5", height=430)
-        else:
-            st.caption("暂无可统计的岗位。完成一次诊断后，这里会显示你的匹配方向分布。")
-        st.caption("以上结论已同时检查出勤、周期、学校层次、专业和毕业年份。")
-    st.subheader("投递漏斗")
+    st.markdown(f'<div class="tagline"><strong>下一步</strong><span>{next_step}</span></div>', unsafe_allow_html=True)
+    st.subheader("优先处理")
+    if suitable.empty:
+        st.markdown(
+            '<div class="empty"><div class="t">还没有可直接投递的岗位</div>'
+            '<div class="d">到「智能诊断」粘贴一条 JD，或用「批量导入」一次投喂多条，结果会自动进入这里。</div></div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        priority = suitable.sort_values("适配度", ascending=False).head(12).copy()
+        priority["适配度"] = priority["适配度"].map(fit_cell)
+        # 首页是短名单，只保留决策必需的 4 列；完整约束在“岗位库”里看。
+        st.dataframe(
+            priority[["公司", "岗位名称", "岗位大类", "适配度"]], width="stretch", hide_index=True,
+            height=min(415, 58 + 35 * len(priority)),
+            column_config={
+                # 宽度之和要贴近容器实际宽度（约 962px）：总和远小于容器时，
+                # Streamlit 会把多出来的空间摊给最后一列，适配度列会空出一大片。
+                "公司": st.column_config.TextColumn(width=132),
+                "岗位名称": st.column_config.TextColumn(width=470),
+                "岗位大类": st.column_config.TextColumn(width=250),
+                "适配度": st.column_config.TextColumn(width=110),
+            },
+        )
+    # 方向分布统计的是整个岗位库，不是只看「可以投递」那几条：
+    # 只统计 2 条时两根等长的条会退化成一条分隔线，反而看不出信息。
+    st.subheader("方向分布")
+    active_roles = []
+    if not catalog_df.empty:
+        role_counts = catalog_df["岗位大类"].value_counts().reindex(ROLE_ORDER, fill_value=0)
+        active_roles = [
+            (ROLE_CHART_LABELS[role], int(count))
+            for role, count in role_counts.items() if count > 0
+        ]
+    if active_roles:
+        render_barlist(active_roles)
+        st.caption(f"岗位库共 {len(catalog_df)} 条，按岗位大类分布")
+    else:
+        st.markdown(
+            '<div class="empty"><div class="t">暂无可统计的岗位</div>'
+            '<div class="d">完成一次诊断后，这里会显示你的方向分布。</div></div>',
+            unsafe_allow_html=True,
+        )
+    st.subheader("判断顺序")
     st.markdown(
         '<div class="flow">'
-        '<div class="step"><div class="n">STEP 01</div><div class="t">能不能投</div>'
+        '<div class="step"><div class="n">1</div><div class="t">能不能投</div>'
         '<div class="d">时间、学校、专业、毕业年份等硬门槛</div></div>'
-        '<div class="step"><div class="n">STEP 02</div><div class="t">值不值得投</div>'
+        '<div class="step"><div class="n">2</div><div class="t">值不值得投</div>'
         '<div class="d">职责、技能、经历证据与主要风险</div></div>'
-        '<div class="step"><div class="n">STEP 03</div><div class="t">怎么投</div>'
+        '<div class="step"><div class="n">3</div><div class="t">怎么投</div>'
         '<div class="d">定制简历、修改提示词与招呼文案</div></div>'
         '</div>',
         unsafe_allow_html=True,
     )
 
 elif page == "我的资料":
-    st.title("我的资料")
+    page_header("我的资料")
     st.markdown('<div class="caption">求职画像、个人简历和大模型接口统一在这里管理</div>', unsafe_allow_html=True)
     prepare_profile_widgets()
     p1, p2 = st.columns([1, 1])
@@ -879,53 +851,137 @@ elif page == "我的资料":
             st.error(f"导入失败：{error}")
 
 elif page == "智能诊断":
-    st.title("智能诊断")
-    st.markdown('<div class="caption">直接粘贴完整 JD，岗位名称、时间和资格限制由系统自动提取</div>', unsafe_allow_html=True)
-    left, right = st.columns([1.35, 1])
-    with left:
-        jd_text = st.text_area("完整 JD", height=340, placeholder="把招聘网站上的岗位信息完整粘贴到这里，包括岗位名称、职责和任职要求……", key="jd_input")
-    with right:
-        st.subheader("本次使用的资料")
-        if profile_ready:
-            st.write(f"**画像**：{profile.school} · {profile.major} · {profile.graduation_year}届")
-            st.write(f"**时间**：每周最多{profile.available_days}天 · 可实习{months_span(profile)}")
-        else:
-            st.warning("求职画像尚未填写完整，请先到“我的资料”补齐必填信息。")
-        if st.session_state.resume_text:
-            st.success(f"简历已就绪：{st.session_state.resume_name}")
-        else:
-            st.warning("尚未上传简历。可以继续做硬约束判断，但能力匹配只基于画像中的技能。")
-        st.caption("需要修改画像、简历或 API 时，请前往“我的资料”。")
-        analyze_button = st.button("分析这个岗位", type="primary", width="stretch", disabled=not profile_ready)
-    if analyze_button:
-        if len(jd_text.strip()) < 30:
-            st.warning("请粘贴完整 JD，至少包含岗位职责或任职要求。")
-        else:
-            st.session_state["analysis"] = analyze_jd(jd_text, profile, st.session_state.resume_text)
-            st.session_state["analysis_jd"] = jd_text
-            st.session_state["analysis_resume"] = st.session_state.resume_text
-            st.session_state["analysis_profile"] = profile
-            st.session_state.pop("llm_result", None)
-            st.session_state["saved_record_id"] = save_user_job(jd_text, st.session_state["analysis"])
-    analysis = st.session_state.get("analysis")
-    if analysis and st.session_state.get("analysis_jd") == jd_text:
-        analysis_profile = st.session_state.get("analysis_profile", profile)
-        save_scope = "已保存到你的岗位库" if st.session_state.auth_mode == "account" else "已加入本次访问的临时岗位库"
-        render_analysis_report(
-            jd_text,
-            analysis_profile,
-            analysis,
-            st.session_state.get("analysis_resume", ""),
-            f"{save_scope}：{st.session_state.get('saved_record_id', '')}",
+    page_header("智能诊断")
+    single_tab, batch_tab = st.tabs(["单条诊断", "批量导入"])
+
+    with single_tab:
+        st.markdown('<div class="caption">粘贴一条完整 JD，岗位名称、时间和资格限制由系统自动提取。</div>', unsafe_allow_html=True)
+        left, right = st.columns([1.35, 1])
+        with left:
+            jd_text = st.text_area("完整 JD", height=340, placeholder="把招聘网站上的岗位信息完整粘贴到这里，包括岗位名称、职责和任职要求……", key="jd_input")
+        with right:
+            st.subheader("本次使用的资料")
+            if profile_ready:
+                st.write(f"**画像**：{profile.school} · {profile.major} · {profile.graduation_year}届")
+                st.write(f"**时间**：每周最多{profile.available_days}天 · 可实习{months_span(profile)}")
+            else:
+                st.warning("求职画像尚未填写完整，请先到“我的资料”补齐必填信息。")
+            if st.session_state.resume_text:
+                st.success(f"简历已就绪：{st.session_state.resume_name}")
+            else:
+                st.warning("尚未上传简历。可以继续做硬约束判断，但能力匹配只基于画像中的技能。")
+            st.caption("需要修改画像、简历或 API 时，请前往“我的资料”。")
+            analyze_button = st.button("分析这个岗位", type="primary", width="stretch", disabled=not profile_ready)
+        if analyze_button:
+            if len(jd_text.strip()) < MIN_JD_LENGTH:
+                st.warning("请粘贴完整 JD，至少包含岗位职责或任职要求。")
+            else:
+                st.session_state["analysis"] = analyze_jd(jd_text, profile, st.session_state.resume_text)
+                st.session_state["analysis_jd"] = jd_text
+                st.session_state["analysis_resume"] = st.session_state.resume_text
+                st.session_state["analysis_profile"] = profile
+                st.session_state.pop("llm_result", None)
+                st.session_state["saved_record_id"] = save_user_job(jd_text, st.session_state["analysis"])
+        analysis = st.session_state.get("analysis")
+        if analysis and st.session_state.get("analysis_jd") == jd_text:
+            analysis_profile = st.session_state.get("analysis_profile", profile)
+            save_scope = "已保存到你的岗位库" if st.session_state.auth_mode == "account" else "已加入本次访问的临时岗位库"
+            render_analysis_report(
+                jd_text,
+                analysis_profile,
+                analysis,
+                st.session_state.get("analysis_resume", ""),
+                f"{save_scope}：{st.session_state.get('saved_record_id', '')}",
+            )
+
+    with batch_tab:
+        st.markdown(
+            f'<div class="caption">一次粘贴多条 JD：用独占一行的 <code>---</code> 分隔；若没有分隔符，'
+            f'则按连续空行切分。每条自动分析并写入岗位库，重复内容会自动去重。</div>',
+            unsafe_allow_html=True,
         )
+        batch_text = st.text_area(
+            "批量 JD", height=250, key="batch_input",
+            placeholder="第一条 JD 全文……\n\n---\n\n第二条 JD 全文……\n\n---\n\n第三条 JD 全文……",
+        )
+        batch_items = split_batch_jds(batch_text) if batch_text.strip() else []
+        if batch_items:
+            duplicates = dropped_duplicate_count(batch_text)
+            dedupe_note = f"，已合并 <b>{duplicates}</b> 条重复内容" if duplicates else ""
+            st.markdown(
+                f'<div class="caption">识别到 <b>{len(batch_items)}</b> 条 JD（每条至少 {MIN_JD_LENGTH} 字）'
+                f'{dedupe_note}。请先核对首行，确认没有被错误切分。</div>',
+                unsafe_allow_html=True,
+            )
+            preview_df = pd.DataFrame([
+                {"#": index, "首行": item.splitlines()[0][:72], "字数": len(item)}
+                for index, item in enumerate(batch_items, 1)
+            ])
+            st.dataframe(preview_df, width="stretch", hide_index=True,
+                         height=min(300, 58 + 35 * len(preview_df)))
+        elif batch_text.strip():
+            st.warning(f"没有识别到完整 JD。请确认每条不少于 {MIN_JD_LENGTH} 字，或用独占一行的 --- 分隔。")
+        if not profile_ready:
+            st.warning("求职画像尚未填写完整，请先到“我的资料”补齐必填信息。")
+        run_batch = st.button(
+            f"分析并入库（{len(batch_items)} 条）", type="primary", width="stretch",
+            disabled=not batch_items or not profile_ready,
+        )
+        if run_batch:
+            batch_rows = []
+            progress = st.progress(0.0, text="正在分析……")
+            for index, item in enumerate(batch_items, 1):
+                item_analysis = analyze_jd(item, profile, st.session_state.resume_text)
+                save_user_job(item, item_analysis)
+                batch_rows.append({
+                    "公司": item_analysis["company"], "岗位名称": item_analysis["role_title"],
+                    "岗位大类": item_analysis["role_family"], "综合结论": item_analysis["decision"],
+                    "适配度": fit_cell(item_analysis["fit_score"]),
+                    "出勤": constraint_value(item_analysis, "每周出勤"),
+                    "周期": constraint_value(item_analysis, "实习周期"),
+                })
+                progress.progress(index / len(batch_items), text=f"正在分析…… {index}/{len(batch_items)}")
+            progress.empty()
+            st.session_state["batch_result"] = pd.DataFrame(batch_rows)
+        if "batch_result" in st.session_state and not st.session_state["batch_result"].empty:
+            result_df = st.session_state["batch_result"]
+            st.subheader("最近一次导入结果")
+            st.markdown(
+                " · ".join(f"{name} <b>{count}</b>" for name, count in result_df["综合结论"].value_counts().items()),
+                unsafe_allow_html=True,
+            )
+            st.dataframe(result_df, width="stretch", hide_index=True,
+                         height=min(400, 58 + 35 * len(result_df)))
+            st.caption("这些岗位已经写入岗位库，可以在“岗位库”页按结论和约束进一步筛选。")
 
 elif page == "岗位库":
-    st.title("岗位库")
+    page_header("岗位库")
     library_scope = "当前账户" if st.session_state.auth_mode == "account" else "本次访问"
     st.markdown(f'<div class="caption">{len(st.session_state.user_jobs)} 条已分析岗位 · 当前支持 {len(ROLE_ORDER)} 类岗位 · 仅显示{library_scope}的数据，并按最新规则与求职画像重新判断</div>', unsafe_allow_html=True)
     with st.expander(f"查看完整岗位分类（{len(ROLE_ORDER)} 类）"):
         taxonomy_df = pd.DataFrame([{"#": index, "岗位大类": family, "覆盖方向": ROLE_DESCRIPTIONS[family]} for index, family in enumerate(ROLE_ORDER, 1)])
         st.dataframe(taxonomy_df, width="stretch", hide_index=True)
+    with st.expander("数据概览 · 结论 / 出勤 / 周期分布"):
+        if catalog_df.empty:
+            st.markdown(
+                '<div class="empty"><div class="t">还没有已分析的岗位</div>'
+                '<div class="d">到「智能诊断」粘贴一条 JD，或用「批量导入」一次投喂多条。</div></div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            o1, o2, o3 = st.columns(3)
+            with o1:
+                st.markdown('<div class="overline">结论</div>', unsafe_allow_html=True)
+                render_barlist(
+                    [(name, int(count)) for name, count in catalog_df["综合结论"].value_counts().items()],
+                    alt=True,
+                )
+            with o2:
+                st.markdown('<div class="overline">出勤要求</div>', unsafe_allow_html=True)
+                render_barlist([(name, int(count)) for name, count in catalog_df["出勤"].value_counts().items()])
+            with o3:
+                st.markdown('<div class="overline">周期要求</div>', unsafe_allow_html=True)
+                render_barlist([(name, int(count)) for name, count in catalog_df["周期"].value_counts().items()])
     if not profile_ready:
         st.warning("请先到“我的资料”补齐求职画像，岗位库才能按你的条件重新计算并展示诊断结果。")
     f1, f2, f3 = st.columns([1.35, 1.1, 1.35])
@@ -946,19 +1002,38 @@ elif page == "岗位库":
     if query.strip():
         filtered = filtered[filtered["公司"].str.contains(query, case=False, na=False) | filtered["岗位名称"].str.contains(query, case=False, na=False) | filtered["记录ID"].str.contains(query, case=False, na=False)]
     st.caption(f"{len(filtered)} 条结果")
+    if filtered.empty:
+        st.markdown(
+            '<div class="empty"><div class="t">没有符合条件的岗位</div>'
+            '<div class="d">调整上方筛选条件，或到「智能诊断」补充新的 JD。</div></div>',
+            unsafe_allow_html=True,
+        )
     library_display = filtered.copy()
     library_display["适配度"] = library_display["适配度"].map(fit_cell)
-    # 学校/专业在详情页的硬约束表里仍可查，列表页收掉它们，避免横向滚动。
-    library_columns = ["记录ID", "公司", "岗位名称", "岗位大类", "综合结论", "适配度", "出勤", "周期", "毕业年份", "保存时间"]
+    # 列表页只留日期，带时间的完整值在下方详情里。省下来的宽度留给岗位名称，
+    # 否则最长的那几列会把保存时间挤到容器外，直接看不见。
+    library_display["保存时间"] = library_display["保存时间"].astype(str).str.slice(0, 10)
+    # 学校/专业/毕业年份在详情页的硬约束表里仍可查。10 列挤不进 962px 的容器，
+    # 硬塞的结果是岗位名称和岗位大类被从中间切断（canvas 表格不会自动省略号），
+    # 所以这里砍掉信息量最低的两列，把宽度让给真正要扫的两列。
+    library_columns = ["记录ID", "公司", "岗位名称", "岗位大类", "综合结论", "适配度", "出勤", "周期", "保存时间"]
     library_widths = {
-        "记录ID": 100, "公司": 88, "岗位名称": 190, "岗位大类": 140, "综合结论": 108,
-        "适配度": 66, "出勤": 68, "周期": 68, "毕业年份": 80, "保存时间": 112,
+        "记录ID": 96, "公司": 72, "岗位名称": 264, "岗位大类": 190, "综合结论": 96,
+        "适配度": 52, "出勤": 56, "周期": 56, "保存时间": 88,
     }
-    st.dataframe(
-        library_display[library_columns], width="stretch", hide_index=True,
-        height=min(430, 58 + 35 * len(library_display)),
-        column_config={name: st.column_config.TextColumn(width=width) for name, width in library_widths.items()},
-    )
+    if not filtered.empty:
+        # 导出的就是眼前这张表的当前筛选结果，方便离线整理或直接发给别人核对。
+        export_frame = library_display[library_columns].astype(str)
+        st.download_button(
+            "导出当前结果（CSV）",
+            data=build_catalog_csv(list(export_frame.columns), export_frame.values.tolist()).encode("utf-8-sig"),
+            file_name="ai_radar_jobs.csv", mime="text/csv",
+        )
+        st.dataframe(
+            library_display[library_columns], width="stretch", hide_index=True,
+            height=min(430, 58 + 35 * len(library_display)),
+            column_config={name: st.column_config.TextColumn(width=width) for name, width in library_widths.items()},
+        )
     if not filtered.empty:
         selected_id = st.selectbox("查看岗位", filtered["记录ID"], format_func=lambda value: f"{value} · {filtered.loc[filtered['记录ID'] == value, '公司'].iloc[0]} · {filtered.loc[filtered['记录ID'] == value, '岗位名称'].iloc[0]}")
         selected = filtered[filtered["记录ID"] == selected_id].iloc[0]
@@ -981,19 +1056,19 @@ elif page == "岗位库":
             st.rerun()
 
 else:
-    st.title("更多")
+    page_header("更多")
     evaluation_tab, about_tab = st.tabs(["评测实验", "关于项目"])
     with evaluation_tab:
         st.markdown('<div class="caption">26 条跨平台样本先冻结预测，之后才建立人工金标准</div>', unsafe_allow_html=True)
         st.caption("样本来自实习僧、智联招聘和牛客网。以下岗位大类指标对应原 AI 岗位六类体系；新扩展的 13 类商科体系已完成规则测试，尚未建立独立人工标注评测集。")
         metric_names = {"role_family": "岗位大类", "weekly_days": "每周天数", "minimum_months": "最低月数", "constraint_result": "硬约束", "bad_case_binary": "Bad Case识别", "bad_case_type": "Bad Case类型"}
-        st.subheader("① 盲测基线（冻结）")
+        st.subheader("盲测基线 · 冻结")
         st.caption("rule-baseline-v1 · 预测在人工标注之前冻结，是项目唯一具备盲测意义的成绩")
         metric_df = pd.DataFrame([{"指标": metric_names[key], "正确数": value["correct"], "样本数": value["total"], "准确率": value["accuracy"]} for key, value in report["metrics"].items()])
         cols = st.columns(3)
         for index, row in metric_df.iterrows():
             cols[index % 3].metric(row["指标"], metric_pct(row["准确率"]), f"{row['正确数']}/{row['样本数']}")
-        st.subheader("② 当前网页引擎（内部回归）")
+        st.subheader("当前网页引擎 · 内部回归")
         if not engine_report:
             st.info("尚未生成 Python 引擎的回归报告。运行 scripts/evaluate_python_engine.py 后刷新本页。")
         else:

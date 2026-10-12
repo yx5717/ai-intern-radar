@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import re
 from dataclasses import asdict, dataclass
 from datetime import date
@@ -783,3 +785,63 @@ F. 100字以内的投递邮件/打招呼文案
 【我的原始简历】
 {resume_section}
 """
+
+
+def build_report_markdown(analysis: dict, jd_text: str, profile: CandidateProfile) -> str:
+    """把一次诊断导出成可存档、可带去面试复盘的 Markdown。"""
+    schedule = analysis["schedule"]
+    fit_score = analysis.get("fit_score")
+    fit_text = "—" if fit_score is None else f"{int(round(float(fit_score)))} / 100"
+    days = schedule["weekly_days"]
+    months = schedule["minimum_months"]
+    lines = [
+        f"# {analysis['company']} · {analysis['role_title']}",
+        "",
+        f"**投递建议：{analysis['decision']}**",
+        "",
+        f"- 岗位大类：{analysis['role_family']} · {analysis['sub_direction']}",
+        f"- 综合适配度：{fit_text}",
+        f"- 每周要求：{days if days is not None else '未提及'}",
+        f"- 最低周期：{months if months is not None else '未提及'} 个月",
+        "",
+        f"- 求职画像：{profile.school} · {profile.major} · {profile.degree} · "
+        f"{profile.graduation_year} 届 · 每周最多 {profile.available_days} 天 · 可实习 {months_span(profile)}",
+        "",
+        "## 硬约束",
+        "",
+    ]
+    for row in analysis["constraints"]:
+        lines.append(f"- **{row['约束']}**：{row['结论']} —— {row['说明']}")
+        if row["证据"] != "未发现明确证据":
+            lines.append(f"  - 证据：{row['证据']}")
+    lines += [
+        "",
+        "## 能力与经历",
+        "",
+        f"- 已匹配：{'、'.join(analysis['matched_skills']) or '上传简历后才能进行可靠匹配'}",
+        f"- JD 要求但简历中未识别：{'、'.join(analysis['missing_skills']) or '没有识别到明确技能缺口'}",
+    ]
+    for risk in analysis["risks"] or ["暂未识别明显风险"]:
+        lines.append(f"- 风险：{risk}")
+    lines += ["", "## 核心交付物", ""]
+    for item in analysis["deliverables"] or ["未能从 JD 中提取明确交付物，建议人工复核职责段落。"]:
+        lines.append(f"- {item}")
+    lines += ["", "## 建议动作", ""]
+    for index, action in enumerate(analysis["next_actions"], 1):
+        lines.append(f"{index}. {action}")
+    lines += ["", "## JD 原文", "", "```", jd_text.strip(), "```", ""]
+    return "\n".join(lines)
+
+
+def build_catalog_csv(columns: list[str], rows: list[list[str]]) -> str:
+    """把岗位库的当前筛选结果拼成 CSV 文本。
+
+    只依赖标准库，不引入 pandas，这样它可以脱离 Streamlit 单独测试。
+    调用方负责用 utf-8-sig 编码——这份 CSV 是给人用 Excel 双击打开的，
+    没有 BOM 的话中文会乱码。
+    """
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(columns)
+    writer.writerows(rows)
+    return buffer.getvalue()
