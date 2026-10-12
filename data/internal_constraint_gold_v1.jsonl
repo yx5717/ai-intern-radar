@@ -1,0 +1,30 @@
+{"job_id": "J001", "school_tier": "未限制", "major": "未限制", "graduation_year": "符合", "note": "标题用「2728届」紧凑写法表示 2027/2028 届，引擎未识别（已记录，未改规则）", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J002", "school_tier": "未限制", "major": "符合", "graduation_year": "未限制", "note": "JD 写明专业不限", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J003", "school_tier": "未限制", "major": "符合", "graduation_year": "符合", "note": "要求在校大学生（大三、大四）或研究生，按在读年级换算", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J004", "school_tier": "未限制", "major": "符合", "graduation_year": "未限制", "note": "", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J005", "school_tier": "未限制", "major": "加分项不满足", "graduation_year": "符合", "note": "STEM 专业背景为优先项；大三大四或研究生在读", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J006", "school_tier": "未限制", "major": "符合", "graduation_year": "加分项不满足", "note": "限 2026 届且为优先项，本人 2028 届不满足", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J007", "school_tier": "未限制", "major": "未限制", "graduation_year": "未限制", "note": "", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J008", "school_tier": "未限制", "major": "符合", "graduation_year": "未限制", "note": "", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J009", "school_tier": "未限制", "major": "未限制", "graduation_year": "未限制", "note": "", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J010", "school_tier": "未限制", "major": "未限制", "graduation_year": "未限制", "note": "", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J011", "school_tier": "未限制", "major": "符合", "graduation_year": "未限制", "note": "", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J012", "school_tier": "未限制", "major": "未限制", "graduation_year": "未限制", "note": "", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J013", "school_tier": "未限制", "major": "加分项不满足", "graduation_year": "未限制", "note": "计算机科学、人工智能为优先项", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J014", "school_tier": "未限制", "major": "符合", "graduation_year": "未限制", "note": "", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J015", "school_tier": "未限制", "major": "符合", "graduation_year": "未限制", "note": "专业不限，其余为优先项", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J016", "school_tier": "未限制", "major": "符合", "graduation_year": "未限制", "note": "", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J017", "school_tier": "未限制", "major": "未限制", "graduation_year": "未限制", "note": "", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J018", "school_tier": "未限制", "major": "符合", "graduation_year": "未限制", "note": "商科相关专业含经济学，本人专业属于该范围", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J019", "school_tier": "未限制", "major": "符合", "graduation_year": "符合", "note": "毕业时间 2027 年以后，本人 2028 届满足", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J020", "school_tier": "未限制", "major": "未限制", "graduation_year": "未限制", "note": "「专业端」「专业创作」是业务词，不是专业要求", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J021", "school_tier": "未限制", "major": "符合", "graduation_year": "未限制", "note": "", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J022", "school_tier": "未限制", "major": "符合", "graduation_year": "未限制", "note": "", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J023", "school_tier": "未限制", "major": "未限制", "graduation_year": "符合", "note": "「专业指导」是业务词；毕业要求写在在读年级上", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J024", "school_tier": "未限制", "major": "符合", "graduation_year": "未限制", "note": "专业不限", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J025", "school_tier": "未限制", "major": "未限制", "graduation_year": "符合", "note": "大三大四研一研二在校生优先，本人在读年级满足", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J026", "school_tier": "未限制", "major": "未限制", "graduation_year": "未限制", "note": "", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J027", "school_tier": "未限制", "major": "符合", "graduation_year": "未限制", "note": "「金融、经济、会计、统计等专业为佳」——引擎触发词表没有「专业为佳」，漏识别（已记录，未改规则）", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J028", "school_tier": "未限制", "major": "符合", "graduation_year": "符合", "note": "专业不限；2027 年以后毕业", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J029", "school_tier": "未限制", "major": "符合", "graduation_year": "未限制", "note": "专业不限", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}
+{"job_id": "J030", "school_tier": "未限制", "major": "未限制", "graduation_year": "未限制", "note": "", "annotated_by": "assistant_self_review", "review_status": "pending_human_review"}

@@ -1,7 +1,22 @@
 {
   "evaluation_scope": "internal_regression_not_blind",
   "caveat": "Python 引擎（radar_core.py）在金标准建立之后编写，作者已见过答案，因此本结果只用于回归与迭代，不具备盲测意义，不得作为跨平台泛化成绩对外呈现。项目唯一的盲测结果仍是 rule-baseline-v1。",
-  "engine_version": "radar-core-py-v3",
+  "gold_dimension_coverage": {
+    "annotated": [
+      "岗位大类",
+      "每周出勤天数",
+      "最低实习月数",
+      "投递结论",
+      "Bad Case 类型"
+    ],
+    "not_annotated": [
+      "学校层次",
+      "专业",
+      "毕业年份"
+    ]
+  },
+  "coverage_note": "「硬约束结论」只覆盖出勤与周期两个维度；学校层次、专业、毕业年份在外部 26 条里没有人工标注，因此不在该数字内。这三个维度的回归用例目前只存在于内部样本与脚本单测中。",
+  "engine_version": "radar-core-py-v4",
   "gold_version": "external-gold-v1",
   "baseline_version": "rule-baseline-v1-frozen",
   "sample_count": 26,
@@ -21,9 +36,9 @@
   "taxonomy_alias_hits": 4,
   "metrics": {
     "role_family": {
-      "correct": 19,
+      "correct": 20,
       "total": 26,
-      "accuracy": 0.7307692307692307
+      "accuracy": 0.7692307692307693
     },
     "weekly_days": {
       "correct": 25,
@@ -54,7 +69,7 @@
   "comparison_with_blind_baseline": {
     "role_family": {
       "baseline": 0.7307692307692307,
-      "python_engine": 0.7307692307692307
+      "python_engine": 0.7692307692307693
     },
     "weekly_days": {
       "baseline": 0.6538461538461539,
@@ -77,5 +92,5 @@
       "python_engine": 0.8076923076923077
     }
   },
-  "generated_at": "2026-10-12T10:27:29Z"
+  "generated_at": "2026-10-12T12:31:09Z"
 }

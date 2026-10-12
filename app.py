@@ -149,12 +149,29 @@ def status_class(value: str) -> str:
 
 
 def render_constraint(row: dict) -> None:
-    st.markdown(
-        f'<div class="constraint"><div><strong>{row["约束"]}</strong><span>{row["说明"]}</span></div>'
-        f'<b class="{status_class(row["结论"])}">{row["结论"]}</b></div>', unsafe_allow_html=True,
+    """一条硬约束。
+
+    证据原来是用 st.caption 另起一行渲染的，于是五条约束会拖出五条游离的灰色文字，
+    看不出哪条属于哪一行。现在整块一次画完：约束名与结论同一行，说明在下一行，
+    证据再缩进一层并带一条引用竖线，层级自己就出来了。
+
+    这里也是全页唯一一个自绘组件，必须走 _h()：约束名和说明都来自 JD 原文，
+    原文里带尖括号时不转义就会把结构注入进 DOM（Streamlit 会剥掉 onerror，
+    今天不可执行脚本，但没有理由留这个口子）。
+    """
+    evidence = (
+        f'<div class="ev">{_h(row["证据"])}</div>'
+        if row["证据"] != "未发现明确证据" else ""
     )
-    if row["证据"] != "未发现明确证据":
-        st.caption(f"证据：{row['证据']}")
+    st.markdown(
+        f'<div class="constraint">'
+        f'<div class="head"><strong>{_h(row["约束"])}</strong>'
+        f'<b class="{status_class(row["结论"])}">{_h(row["结论"])}</b></div>'
+        f'<div class="note">{_h(row["说明"])}</div>'
+        f'{evidence}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
 
 PROFILE_DEFAULTS = {
@@ -581,6 +598,8 @@ if st.session_state.auth_mode == "account" and st.session_state.get("_account_lo
 
 report = load_json("external_eval_v1.json")
 engine_report = load_json("python_engine_eval_v1.json") if (DATA / "python_engine_eval_v1.json").exists() else None
+internal_report = load_json("internal_constraint_eval_v1.json") if (DATA / "internal_constraint_eval_v1.json").exists() else None
+INTERNAL_DIMENSION_LABELS = {"school_tier": "学校层次", "major": "专业", "graduation_year": "毕业年份"}
 
 with st.sidebar:
     st.markdown('<div class="brand"><span class="dot"></span>AI 实习雷达</div>', unsafe_allow_html=True)
@@ -1000,7 +1019,13 @@ elif page == "岗位库":
         & catalog_df["毕业年份"].isin(grad_filter)
     ]
     if query.strip():
-        filtered = filtered[filtered["公司"].str.contains(query, case=False, na=False) | filtered["岗位名称"].str.contains(query, case=False, na=False) | filtered["记录ID"].str.contains(query, case=False, na=False)]
+        # pandas 的 str.contains 默认把入参当正则：搜索框里打一个「(」或「*」
+        # 就会抛 PatternSyntaxException，整页直接崩掉。这里只做字面量匹配。
+        filtered = filtered[
+            filtered["公司"].str.contains(query, case=False, na=False, regex=False)
+            | filtered["岗位名称"].str.contains(query, case=False, na=False, regex=False)
+            | filtered["记录ID"].str.contains(query, case=False, na=False, regex=False)
+        ]
     st.caption(f"{len(filtered)} 条结果")
     if filtered.empty:
         st.markdown(
@@ -1061,36 +1086,61 @@ else:
     with evaluation_tab:
         st.markdown('<div class="caption">26 条跨平台样本先冻结预测，之后才建立人工金标准</div>', unsafe_allow_html=True)
         st.caption("样本来自实习僧、智联招聘和牛客网。以下岗位大类指标对应原 AI 岗位六类体系；新扩展的 13 类商科体系已完成规则测试，尚未建立独立人工标注评测集。")
-        metric_names = {"role_family": "岗位大类", "weekly_days": "每周天数", "minimum_months": "最低月数", "constraint_result": "硬约束", "bad_case_binary": "Bad Case识别", "bad_case_type": "Bad Case类型"}
-        st.subheader("盲测基线 · 冻结")
-        st.caption("rule-baseline-v1 · 预测在人工标注之前冻结，是项目唯一具备盲测意义的成绩")
-        metric_df = pd.DataFrame([{"指标": metric_names[key], "正确数": value["correct"], "样本数": value["total"], "准确率": value["accuracy"]} for key, value in report["metrics"].items()])
-        cols = st.columns(3)
-        for index, row in metric_df.iterrows():
-            cols[index % 3].metric(row["指标"], metric_pct(row["准确率"]), f"{row['正确数']}/{row['样本数']}")
-        st.subheader("当前网页引擎 · 内部回归")
+        metric_names = {"role_family": "岗位大类", "weekly_days": "每周天数", "minimum_months": "最低月数", "constraint_result": "硬约束结论", "bad_case_binary": "Bad Case识别", "bad_case_type": "Bad Case类型"}
+        st.subheader("评测结果")
+        st.caption("每格是当前网页引擎的准确率；副行给出命中数与盲测基线做对照。")
+        # 原来把两套数字各画一遍、再补一张对照表，同一批数字在页面上出现了三次。
+        # 现在一格里同时给出「当前引擎」与「盲测基线」，一屏读完。
         if not engine_report:
             st.info("尚未生成 Python 引擎的回归报告。运行 scripts/evaluate_python_engine.py 后刷新本页。")
+            baseline_cols = st.columns(3)
+            for index, (key, value) in enumerate(report["metrics"].items()):
+                baseline_cols[index % 3].metric(
+                    metric_names[key], metric_pct(value["accuracy"]), f"{value['correct']}/{value['total']}",
+                )
         else:
             st.warning(engine_report["caveat"])
-            engine_rows = [
-                {"指标": metric_names[key], "正确数": value["correct"], "样本数": value["total"], "准确率": value["accuracy"]}
-                for key, value in engine_report["metrics"].items() if value["accuracy"] is not None
-            ]
-            engine_df = pd.DataFrame(engine_rows)
-            engine_cols = st.columns(3)
-            for index, row in engine_df.iterrows():
-                engine_cols[index % 3].metric(row["指标"], metric_pct(row["准确率"]), f"{row['正确数']}/{row['样本数']}")
-            comparison_df = pd.DataFrame([
-                {"指标": metric_names[key], "盲测基线": metric_pct(value["baseline"]), "当前引擎": metric_pct(value["python_engine"])}
-                for key, value in engine_report["comparison_with_blind_baseline"].items()
-            ])
-            st.dataframe(comparison_df, width="stretch", hide_index=True)
+            # 不写清楚覆盖范围的话，「硬约束结论 84.6%」会被误读成五类硬约束的总体准确率。
+            if engine_report.get("coverage_note"):
+                st.info(engine_report["coverage_note"])
+            comparison = engine_report["comparison_with_blind_baseline"]
+            result_cols = st.columns(3)
+            slot = 0
+            for key, value in engine_report["metrics"].items():
+                if value["accuracy"] is None:
+                    continue
+                baseline = comparison.get(key, {}).get("baseline")
+                detail = f"{value['correct']}/{value['total']}"
+                if baseline is not None:
+                    detail += f" · 盲测基线 {metric_pct(baseline)}"
+                result_cols[slot % 3].metric(metric_names[key], metric_pct(value["accuracy"]), detail)
+                slot += 1
             st.caption(
+                f"盲测基线 rule-baseline-v1 的预测在人工标注之前冻结，是项目唯一具备盲测意义的成绩；"
+                f"当前引擎是内部回归，作者已见过金标准，不能当作泛化成绩。"
                 f"岗位大类比较前已把金标准中的「职能支持/边界岗位」折叠为「职能支持/其他岗位」（{engine_report['taxonomy_alias_hits']} 条），"
                 "否则同一概念的两种写法会被直接判错。Bad Case 类型的剩余误差集中在「边界分类」，它取决于岗位分类质量，"
                 "「摘要正文冲突」为独立规则、可稳定命中。"
             )
+        st.subheader("硬约束另外三个维度 · 内部样本")
+        if not internal_report:
+            st.info("尚未生成内部三维度回归报告。运行 scripts/evaluate_internal_constraints.py 后刷新本页。")
+        else:
+            st.caption(internal_report["caveat"])
+            internal_cols = st.columns(3)
+            for index, (key, value) in enumerate(internal_report["metrics"].items()):
+                internal_cols[index % 3].metric(
+                    INTERNAL_DIMENSION_LABELS.get(key, key), metric_pct(value["accuracy"]),
+                    f"{value['correct']}/{value['total']}",
+                )
+            if internal_report["disagreements"]:
+                st.caption(
+                    "已知不一致："
+                    + "；".join(
+                        f"{item['job_id']} {item['dimension']}（标注 {item['gold']}，引擎 {item['engine']}）"
+                        for item in internal_report["disagreements"]
+                    )
+                )
     with about_tab:
         st.markdown('<div class="caption">项目背景、分析边界与版本说明</div>', unsafe_allow_html=True)
         st.subheader("为什么做")
@@ -1100,7 +1150,7 @@ else:
         st.write("**大模型层**：理解复杂职责、比较简历证据、生成针对性改写。需要用户自行配置 API，且不会参与已冻结的 v1 盲测成绩。")
         st.warning("任何模型生成的简历都必须人工核验。系统明确禁止虚构经历、指标、奖项和技能。")
         st.subheader("项目版本")
-        version_df = pd.DataFrame([["内部数据集", "30 条 BOSS JD", "人工复核完成"], ["外部盲测", "26 条 · 3 平台", "冻结后标注"], ["规则基线", "rule-baseline-v1", "保留原始结果"], ["网页引擎回归", "radar-core-py-v3", "26 条 · 内部回归，非盲测"], ["求职助手", "web-v7", "深色数据风界面 + 13 类岗位 + 简历自动回填 + 6 类模型接口"]], columns=["模块", "版本/规模", "状态"])
+        version_df = pd.DataFrame([["内部数据集", "30 条 BOSS JD", "人工复核完成"], ["外部盲测", "26 条 · 3 平台", "冻结后标注"], ["规则基线", "rule-baseline-v1", "保留原始结果"], ["网页引擎回归", "radar-core-py-v4", "26 条 · 内部回归，非盲测"], ["求职助手", "web-v8", "深色数据风界面 + 13 类岗位 + 简历自动回填 + 6 类模型接口"]], columns=["模块", "版本/规模", "状态"])
         st.dataframe(version_df, width="stretch", hide_index=True)
 
 sidebar_api_status.caption("模型：" + api_status_label())

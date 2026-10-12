@@ -1,0 +1,55 @@
+{
+  "evaluation_scope": "internal_regression_not_blind",
+  "annotation_source": "assistant_self_review_pending_human_review",
+  "caveat": "三维度标注由助手完成、尚未经本人复核，只能用于回归，不得作为准确率对外呈现。外部 26 条金标准不含这三个维度，因此这里的数字与网页上的「硬约束结论」不可互相替代。",
+  "sample_count": 30,
+  "gold_distinct_values": {
+    "school_tier": [
+      "未限制"
+    ],
+    "major": [
+      "加分项不满足",
+      "未限制",
+      "符合"
+    ],
+    "graduation_year": [
+      "加分项不满足",
+      "未限制",
+      "符合"
+    ]
+  },
+  "metrics": {
+    "school_tier": {
+      "correct": 30,
+      "total": 30,
+      "accuracy": 1.0
+    },
+    "major": {
+      "correct": 29,
+      "total": 30,
+      "accuracy": 0.9666666666666667
+    },
+    "graduation_year": {
+      "correct": 29,
+      "total": 30,
+      "accuracy": 0.9666666666666667
+    }
+  },
+  "disagreements": [
+    {
+      "job_id": "J001",
+      "dimension": "毕业年份",
+      "gold": "符合",
+      "engine": "未限制",
+      "note": "标题用「2728届」紧凑写法表示 2027/2028 届，引擎未识别（已记录，未改规则）"
+    },
+    {
+      "job_id": "J027",
+      "dimension": "专业",
+      "gold": "符合",
+      "engine": "未限制",
+      "note": "「金融、经济、会计、统计等专业为佳」——引擎触发词表没有「专业为佳」，漏识别（已记录，未改规则）"
+    }
+  ],
+  "generated_at": "2026-10-12T12:31:09Z"
+}

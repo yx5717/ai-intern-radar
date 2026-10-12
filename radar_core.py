@@ -139,6 +139,25 @@ def clause_at(text: str, start: int, end: int, limit: int = 60) -> str:
     return compact(text[left + 1:right])[:limit]
 
 
+# 招聘平台会把自家的水印留在 JD 首行，例如「14.智联招聘 2026-09-17 更新」。
+# 剥离序号与日期之后，这一行就只剩平台名，而「招聘」二字恰好命中 role_markers，
+# 于是平台名被当成岗位名，岗位大类也跟着被误判（实测 EXT014 被分到人力资源）。
+PLATFORM_NOISE = re.compile(
+    r"^(?:实习僧|智联招聘|智联|牛客网|牛客|BOSS直聘|Boss直聘|拉勾|拉勾网|前程无忧|51job|"
+    r"58同城|猎聘|应届生求职网|大街网|领英|LinkedIn|脉脉|看准网|职友集|智联校园)$",
+    re.I,
+)
+
+
+def _is_platform_noise(text: str) -> bool:
+    """整行只剩平台名时判为水印。
+
+    只在「去掉日期、薪资之后恰好等于平台名」时命中，所以
+    「脉脉 AI产品助理实习生（AI通话方向）」这类带真实岗位名的行不会被误杀。
+    """
+    return bool(PLATFORM_NOISE.match(text.strip(" -｜|·—\t")))
+
+
 def extract_identity(jd_text: str) -> dict:
     # 采集脚本会给每条 JD 加「1.」「2.」这类序号，它会挡住公司名与岗位名的拆分，
     # 因此对每一行统一剥离，而不是只处理首行。
@@ -159,6 +178,8 @@ def extract_identity(jd_text: str) -> dict:
         if re.search(role_markers, line, re.I) and len(line) <= 90:
             candidate = re.sub(r"\s+\d{3,4}-\d{2}-\d{2}.*$", "", line).strip()
             candidate = re.sub(r"\s+\d+(?:-\d+)?元?/天.*$", "", candidate).strip()
+            if _is_platform_noise(candidate):
+                continue
             title = candidate
             break
     if not title:
@@ -240,13 +261,28 @@ def extract_schedule(jd_text: str, profile: CandidateProfile) -> dict:
     day_conflict = len({(x["min"], x["max"]) for x in hard_days}) > 1
     month_conflict = len({(x["min"], x["max"]) for x in hard_months}) > 1
     candidate_min_months = profile.min_months if profile.min_months is not None else 0
+    # 某一条天数/月数本人达不到时，还要看 JD 里有没有别的写法是本人能满足的。
+    # 有的话就不是硬否决，而是「需核实」——例如摘要写 5 天、正文写「4 天及以上」。
+    day_alternatives = [
+        item for item in hard_days
+        if item["min"] <= profile.available_days <= item["max"]
+        or (item["minimum"] and item["min"] <= profile.available_days)
+    ]
+    month_alternatives = [
+        item for item in hard_months
+        if item["min"] <= profile.max_months and item["max"] >= candidate_min_months
+    ]
 
     day_status = "未提及"
     if required_days is not None:
-        alternatives = [x for x in hard_days if x["min"] <= profile.available_days <= x["max"] or (x["minimum"] and x["min"] <= profile.available_days)]
-        if required_days <= profile.available_days and not day_conflict:
+        if day_conflict:
+            # JD 里出现两个互相冲突的天数（例如「实习期每周3天，转正后每周5天」）。
+            # 此时无法判断哪个才是投递门槛，如实标为需核实。
+            # 旧实现会拿第一个值直接判「不符合」，把一个含糊条件升级成了硬否决。
+            day_status = "需核实"
+        elif required_days <= profile.available_days:
             day_status = "符合"
-        elif alternatives:
+        elif day_alternatives:
             day_status = "需核实"
         else:
             day_status = "不符合"
@@ -255,14 +291,15 @@ def extract_schedule(jd_text: str, profile: CandidateProfile) -> dict:
 
     month_status = "未提及"
     if required_months is not None:
-        alternatives = [x for x in hard_months if x["min"] <= profile.max_months and x["max"] >= candidate_min_months]
         if profile.min_months is None:
             fits = required_months <= profile.max_months
         else:
             fits = profile.min_months <= required_months <= profile.max_months
-        if fits and not month_conflict:
+        if month_conflict:
+            month_status = "需核实"
+        elif fits:
             month_status = "符合"
-        elif alternatives:
+        elif month_alternatives:
             month_status = "需核实"
         else:
             month_status = "不符合"
@@ -270,6 +307,10 @@ def extract_schedule(jd_text: str, profile: CandidateProfile) -> dict:
         month_status = "需核实"
 
     evidence = "；".join(dict.fromkeys([item["evidence"] for item in [*days, *months] if item["evidence"]]))[:420]
+    # 出勤与周期各自只展示自己那条证据。
+    # 原先把合并后的 evidence 同时塞给两条约束，页面上同一段长证据会连着出现两次。
+    day_evidence = "；".join(dict.fromkeys([item["evidence"] for item in days if item["evidence"]]))[:300]
+    month_evidence = "；".join(dict.fromkeys([item["evidence"] for item in months if item["evidence"]]))[:300]
     return {
         "weekly_days": required_days,
         "minimum_months": required_months,
@@ -277,6 +318,8 @@ def extract_schedule(jd_text: str, profile: CandidateProfile) -> dict:
         "month_status": month_status,
         "conflict": day_conflict or month_conflict,
         "evidence": evidence,
+        "day_evidence": day_evidence,
+        "month_evidence": month_evidence,
     }
 
 
@@ -359,6 +402,20 @@ def analyze_school(jd_text: str, profile: CandidateProfile) -> dict:
     return _constraint("学校层次", "需核实", "学校层次措辞不够明确", evidence)
 
 
+# 专业匹配用的显式词表。
+#
+# 旧实现只列了 6 个词，末尾还挂了一句 `or "统计" in evidence`——那是个无条件命中：
+# 只要 JD 里出现「统计」，无论本人是什么专业都判「符合」。本人是经济统计学时看不出来，
+# 一旦换成别人的画像（比如英语、会计）演示，结论就会失真。
+# 现在改成「本人专业里出现该词」且「JD 里也出现该词」双向都要成立，并把词表补齐。
+MAJOR_TERMS = [
+    "统计", "经济", "数学", "金融", "经管", "数据科学", "计算机", "软件工程", "人工智能",
+    "信息管理", "信息与计算", "电子信息", "网络工程", "自动化", "会计", "财务", "审计",
+    "税务", "财政", "保险", "精算", "市场营销", "工商管理", "管理科学", "国际贸易",
+    "电子商务", "人力资源", "物流管理", "心理学",
+]
+
+
 def analyze_major(jd_text: str, profile: CandidateProfile) -> dict:
     if re.search(r"专业不限|专业不限制|不限专业", jd_text):
         return _constraint("专业", "符合", "岗位明确写明专业不限", evidence_fragment(jd_text, r"专业不限|不限专业"))
@@ -367,8 +424,7 @@ def analyze_major(jd_text: str, profile: CandidateProfile) -> dict:
         return _constraint("专业", "未限制", "未发现明确专业限制", "")
     evidence = compact("；".join(fragments))[:420]
     preferred = bool(re.search(r"优先|加分", evidence))
-    match_terms = ["统计", "经济", "数学", "金融", "经管", "数据科学"]
-    matched = any(term in profile.major and term in evidence for term in match_terms) or "统计" in evidence
+    matched = any(term in profile.major and term in evidence for term in MAJOR_TERMS)
     computer_only = bool(re.search(r"(?:仅限|必须|要求)[^。；\n]{0,20}(?:计算机|软件工程|人工智能)", evidence))
     if matched:
         return _constraint("专业", "符合", f"{profile.major}在岗位接受范围内", evidence)
@@ -434,52 +490,111 @@ def _grade_requirement(jd_text: str) -> dict | None:
     }
 
 
+_GRADUATION_KEYWORD = re.compile(r"毕业时间[：:]?")
+_SENTENCE_BREAKS = "。；;\n"
+# 「2025届及以后」「毕业时间2027年以后」这类写法是开区间，本人只要晚于起点就满足。
+# 旧实现只认「及以后」和「以后毕业」，漏掉了更常见的「2027年以后」。
+_OPEN_ENDED = re.compile(r"20\d{2}\s*年?\s*(?:及)?以后|及以后|以后毕业|之后毕业")
+# 开区间写法不一定带「毕业时间」四个字（内部样本 J028 写的是「2027年以后毕业」），
+# 只靠 _GRADUATION_KEYWORD 定位会整条漏掉，于是被判成「未限制」。
+_OPEN_ENDED_FLOOR = re.compile(
+    r"(20\d{2})\s*年?\s*(?:及)?(?:以后|之后)\s*毕业|(20\d{2})\s*届\s*(?:及)?(?:以后|之后)"
+)
+
+
+def _graduation_window(jd_text: str) -> str:
+    """截取「毕业时间」之后、句末之前的一小段文本。
+
+    只在窗口内找年份，是为了不让相邻的「实习时间：2026年7月」把年份混进来。
+    """
+    keyword = _GRADUATION_KEYWORD.search(jd_text)
+    if not keyword:
+        return ""
+    tail = jd_text[keyword.end():]
+    stop = min(
+        (position for separator in _SENTENCE_BREAKS if (position := tail.find(separator)) >= 0),
+        default=len(tail),
+    )
+    return tail[:stop][:60]
+
+
 def analyze_graduation(jd_text: str, profile: CandidateProfile, reference_date: date | None = None) -> dict:
-    years = [int(value) for value in re.findall(r"(20\d{2})\s*届", jd_text)]
-    range_match = re.search(r"毕业时间[：:]?\s*(20\d{2})年?[^\d]{0,8}(20\d{2})", jd_text)
     evidence = evidence_fragment(jd_text, r"20\d{2}\s*届|毕业时间", 45)
-    if range_match:
-        low, high = map(int, range_match.groups())
+
+    if profile.graduation_year is None:
+        return _constraint("毕业年份", "需核实", "求职画像尚未填写毕业年份，无法判断岗位的毕业时间限制", evidence)
+
+    # 区间识别：只要「毕业时间」窗口里出现两个年份就算区间。
+    #
+    # 旧实现写成 `毕业时间[：:]?\s*(20\d{2})年?[^\d]{0,8}(20\d{2})`，
+    # 中间那段 [^\d]{0,8} 不允许出现数字，于是「2024年7月-2025年6月」这种
+    # 带月份的常见写法整条漏掉，岗位被判成「未限制」，直接给出「可以投递」。
+    # 现在只认「窗口里有几个年份」，不再要求固定的书写形状。
+    window_years = [int(value) for value in re.findall(r"(20\d{2})", _graduation_window(jd_text))]
+    if len(window_years) >= 2:
+        low, high = sorted(window_years[:2])
         status = "符合" if low <= profile.graduation_year <= high else "不符合"
         return _constraint("毕业年份", status, f"个人为{profile.graduation_year}届，岗位范围为{low}-{high}", evidence)
-    if not years:
-        grade_requirement = _grade_requirement(jd_text)
-        if not grade_requirement:
-            return _constraint("毕业年份", "未限制", "未发现明确毕业年份或在读年级限制", "")
-        current_date = reference_date or date.today()
-        academic_start = _academic_year_start(current_date)
-        candidate_grade = _undergraduate_grade(profile.graduation_year, academic_start)
-        required_grade = grade_requirement["grade"]
-        if profile.degree != "本科" or candidate_grade is None:
-            return _constraint(
-                "毕业年份", "需核实", f"岗位限制本科在读年级，但无法由{profile.degree}、{profile.graduation_year}届可靠换算",
-                grade_requirement["evidence"],
-            )
-        matches_grade = (
-            candidate_grade >= required_grade if grade_requirement["minimum"]
-            else candidate_grade <= required_grade if grade_requirement["maximum"]
-            else candidate_grade == required_grade
+
+    # 「2027年以后毕业」这类开区间：本人不早于起点就满足。
+    open_floors = [int(match.group(1) or match.group(2)) for match in _OPEN_ENDED_FLOOR.finditer(jd_text)]
+    if open_floors:
+        floor = max(open_floors)
+        status = "符合" if profile.graduation_year >= floor else "不符合"
+        floor_evidence = evidence_fragment(jd_text, r"20\d{2}\s*年?\s*(?:及)?(?:以后|之后)\s*毕业|20\d{2}\s*届\s*(?:及)?(?:以后|之后)", 40)
+        return _constraint(
+            "毕业年份", status,
+            f"个人为{profile.graduation_year}届，岗位要求{floor}年以后毕业",
+            floor_evidence or evidence,
         )
-        if matches_grade:
+
+    required_years = {int(value) for value in re.findall(r"(20\d{2})\s*届", jd_text)} | set(window_years)
+    if required_years:
+        preferred = "优先" in evidence
+        if profile.graduation_year in required_years or (
+            _OPEN_ENDED.search(evidence) and profile.graduation_year >= min(required_years)
+        ):
             status = "符合"
-        elif grade_requirement["preferred"]:
+        elif preferred:
             status = "加分项不满足"
         else:
             status = "不符合"
-        school_year = f"{academic_start}-{academic_start + 1}学年"
-        description = (
-            f"个人为{profile.graduation_year}届，按{school_year}推算为本科大{_GRADE_LABELS[candidate_grade]}；"
-            f"岗位要求本科大{_GRADE_LABELS[required_grade]}{'及以上' if grade_requirement['minimum'] else '及以下' if grade_requirement['maximum'] else ''}"
+        return _constraint("毕业年份", status, f"个人为{profile.graduation_year}届", evidence)
+
+    grade_requirement = _grade_requirement(jd_text)
+    if not grade_requirement:
+        # 写明了「毕业时间」却没能解析出任何年份或年级时，不再判「未限制」——
+        # 那等于替招聘方宣布「什么届都行」，风险由用户承担。如实标为需核实。
+        if _GRADUATION_KEYWORD.search(jd_text):
+            return _constraint("毕业年份", "需核实", "岗位写明了毕业时间，但未能解析出可核对的年份，需人工确认", evidence)
+        return _constraint("毕业年份", "未限制", "未发现明确毕业年份或在读年级限制", "")
+
+    current_date = reference_date or date.today()
+    academic_start = _academic_year_start(current_date)
+    candidate_grade = _undergraduate_grade(profile.graduation_year, academic_start)
+    required_grade = grade_requirement["grade"]
+    if profile.degree != "本科" or candidate_grade is None:
+        return _constraint(
+            "毕业年份", "需核实", f"岗位限制本科在读年级，但无法由{profile.degree}、{profile.graduation_year}届可靠换算",
+            grade_requirement["evidence"],
         )
-        return _constraint("毕业年份", status, description, grade_requirement["evidence"])
-    preferred = "优先" in evidence
-    if profile.graduation_year in years or (re.search(r"及以后|以后毕业", evidence) and profile.graduation_year >= min(years)):
+    matches_grade = (
+        candidate_grade >= required_grade if grade_requirement["minimum"]
+        else candidate_grade <= required_grade if grade_requirement["maximum"]
+        else candidate_grade == required_grade
+    )
+    if matches_grade:
         status = "符合"
-    elif preferred:
+    elif grade_requirement["preferred"]:
         status = "加分项不满足"
     else:
         status = "不符合"
-    return _constraint("毕业年份", status, f"个人为{profile.graduation_year}届", evidence)
+    school_year = f"{academic_start}-{academic_start + 1}学年"
+    description = (
+        f"个人为{profile.graduation_year}届，按{school_year}推算为本科大{_GRADE_LABELS[candidate_grade]}；"
+        f"岗位要求本科大{_GRADE_LABELS[required_grade]}{'及以上' if grade_requirement['minimum'] else '及以下' if grade_requirement['maximum'] else ''}"
+    )
+    return _constraint("毕业年份", status, description, grade_requirement["evidence"])
 
 
 def _constraint(name: str, status: str, conclusion: str, evidence: str) -> dict:
@@ -552,23 +667,42 @@ def extract_skills(text: str) -> list[str]:
     return found
 
 
-DUTY_HEADINGS = re.compile(r"(?:岗位职责|工作职责|职位职责|主要职责|工作内容|职位描述|职责描述|工作描述|你将负责|你将参与|工作任务|工作范围)")
-REQUIREMENT_HEADINGS = re.compile(r"(?:任职要求|岗位要求|职位要求|任职资格|任职条件|岗位条件|申请要求|资格要求|我们希望|我们希望你|你需要|要求如下|加分项)")
+def _heading_pattern(words: str) -> str:
+    """把标题词表编译成「不是句子成分」的正则。
+
+    纯按关键词命中会误伤正文：J001 的职责段里写着「为符合岗位要求的同学提供……」，
+    「岗位要求」被当成要求段标题，于是要求段的起点落在职责段内部，把职责整段砍掉。
+    这里补一条否定前瞻：标题后面紧跟「的 / 者 / 性 / 顿号 / 逗号 / 句号」时说明它是
+    句子里的名词短语，不是标题。真正的要求标题后面接的是「：」「 1、」或换行。
+    """
+    return rf"(?:{words})(?!\s*[的者性，,、。])"
+
+
+DUTY_HEADINGS = re.compile(_heading_pattern(r"(?:岗位职责|工作职责|职位职责|主要职责|工作内容|职位描述|职责描述|工作描述|你将负责|你将参与|工作任务|工作范围)"))
+REQUIREMENT_HEADINGS = re.compile(_heading_pattern(r"(?:任职要求|岗位要求|职位要求|任职资格|任职条件|岗位条件|申请要求|资格要求|我们希望|我们希望你|你需要|要求如下|加分项)"))
 _NUMBER_PREFIX = re.compile(r"^\s*(?:\d+\s*[.．、)）]|[-–—•·*])\s*")
 _ACTION_TERMS = ["负责", "参与", "搭建", "建设", "分析", "设计", "输出", "推动", "优化", "制定", "维护", "跟踪", "沉淀", "构建"]
 _OUTPUT_TERMS = ["报告", "方案", "产品", "原型", "指标", "看板", "测试集", "知识库", "工作流", "策略", "数据", "模型", "文档", "结论", "建议"]
 
 
+def _body_without_requirements(jd_text: str) -> str:
+    """砍掉「任职要求」标题及其之后的内容。"""
+    requirement = REQUIREMENT_HEADINGS.search(jd_text)
+    return jd_text[:requirement.start()] if requirement else jd_text
+
+
 def _duty_scope(jd_text: str) -> str:
-    """Trim the JD down to the responsibility block, so requirements never leak into deliverables."""
-    scope = jd_text
+    """Trim the JD down to the responsibility block, so requirements never leak into deliverables.
+
+    先找职责标题、再从职责段内部找要求标题，而不是先把 JD 从要求标题处截断：
+    少数 JD 把要求写在职责之前，先截断会把职责段一起砍掉。
+    """
+    duty = DUTY_HEADINGS.search(jd_text)
+    if not duty:
+        return _body_without_requirements(jd_text)
+    scope = jd_text[duty.end():]
     requirement = REQUIREMENT_HEADINGS.search(scope)
-    if requirement:
-        scope = scope[:requirement.start()]
-    duty = DUTY_HEADINGS.search(scope)
-    if duty:
-        scope = scope[duty.end():]
-    return scope
+    return scope[:requirement.start()] if requirement else scope
 
 
 def _score_deliverables(scope: str) -> list[str]:
@@ -590,11 +724,15 @@ def _score_deliverables(scope: str) -> list[str]:
 
 
 def extract_deliverables(jd_text: str) -> list[str]:
-    for scope in (_duty_scope(jd_text), jd_text):
-        result = _score_deliverables(scope)
-        if result:
-            return result
-    return []
+    """优先从职责段取交付物；没有职责段时退回到「去掉要求段之后」的正文。
+
+    旧实现的第二步直接用整篇 JD，于是「任职要求」里的句子（例如
+    「具备扎实的统计学基础」）会被当成岗位交付物列出来。要求段必须先剥掉。
+    """
+    result = _score_deliverables(_duty_scope(jd_text))
+    if result:
+        return result
+    return _score_deliverables(_body_without_requirements(jd_text))
 
 
 def find_similar_cases(jd_text: str, cases: list[dict], limit: int = 3) -> list[dict]:
@@ -677,8 +815,8 @@ def analyze_jd(jd_text: str, profile: CandidateProfile, resume_text: str = "") -
     day_value = schedule["weekly_days"] if schedule["weekly_days"] is not None else ("未解析出具体天数" if schedule["day_status"] == "需核实" else "未提及")
     month_value = schedule["minimum_months"] if schedule["minimum_months"] is not None else ("未解析出具体月数" if schedule["month_status"] == "需核实" else "未提及")
     constraints = [
-        _constraint("每周出勤", schedule["day_status"], f"个人最多{profile.available_days}天/周；岗位识别值为{day_value}", schedule["evidence"]),
-        _constraint("实习周期", schedule["month_status"], f"个人可实习{months_span(profile)}；岗位识别值为{month_value}", schedule["evidence"]),
+        _constraint("每周出勤", schedule["day_status"], f"个人最多{profile.available_days}天/周；岗位识别值为{day_value}", schedule["day_evidence"]),
+        _constraint("实习周期", schedule["month_status"], f"个人可实习{months_span(profile)}；岗位识别值为{month_value}", schedule["month_evidence"]),
         analyze_school(jd_text, profile),
         analyze_major(jd_text, profile),
         analyze_graduation(jd_text, profile),

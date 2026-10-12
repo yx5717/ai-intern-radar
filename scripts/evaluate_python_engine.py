@@ -22,7 +22,7 @@ from radar_core import ROLE_ALIASES, CandidateProfile, analyze_jd, normalize_rol
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
-ENGINE_VERSION = "radar-core-py-v3"
+ENGINE_VERSION = "radar-core-py-v4"
 DECISION_TO_GOLD = {"可以投递": "通过", "投递前需确认": "需要核实", "不建议投递": "不通过"}
 COMPARED_METRICS = ("role_family", "weekly_days", "minimum_months", "constraint_result", "bad_case_binary", "bad_case_type")
 
@@ -105,6 +105,18 @@ def main() -> None:
             "Python 引擎（radar_core.py）在金标准建立之后编写，作者已见过答案，"
             "因此本结果只用于回归与迭代，不具备盲测意义，不得作为跨平台泛化成绩对外呈现。"
             "项目唯一的盲测结果仍是 rule-baseline-v1。"
+        ),
+        # 外部 26 条的金标准只人工标注了下面这几项。「硬约束结论」是由出勤天数与
+        # 实习月数推出的投递结论，因此它并不覆盖学校层次、专业、毕业年份三个维度——
+        # 这三个维度在外部集里没有任何人工标注，引擎判错也无法在这里体现出来。
+        # 不写清楚的话，84.6% 这个数字会被误读成「五类硬约束的总体准确率」。
+        "gold_dimension_coverage": {
+            "annotated": ["岗位大类", "每周出勤天数", "最低实习月数", "投递结论", "Bad Case 类型"],
+            "not_annotated": ["学校层次", "专业", "毕业年份"],
+        },
+        "coverage_note": (
+            "「硬约束结论」只覆盖出勤与周期两个维度；学校层次、专业、毕业年份在外部 26 条里"
+            "没有人工标注，因此不在该数字内。这三个维度的回归用例目前只存在于内部样本与脚本单测中。"
         ),
         "engine_version": ENGINE_VERSION,
         "gold_version": "external-gold-v1",

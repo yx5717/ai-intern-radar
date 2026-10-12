@@ -217,6 +217,42 @@ home_captions = "\n".join(item.value for item in app.caption)
 if f"岗位库共 {len(app.session_state['user_jobs'])} 条" not in home_captions:
     raise AssertionError(f"首页方向分布没有覆盖整个岗位库：{home_captions}")
 
+# --- N2 回归：搜索框输入正则元字符不得让整页崩溃 ---
+# pandas 的 str.contains 默认 regex=True，输入「(」「[」「*」会抛
+# PatternSyntaxException，整页直接报错。这里逐个试一遍。
+app = AppTest.from_file(str(app_path), default_timeout=60).run()
+app.radio[0].set_value("岗位库").run()
+for probe in ["(", "[", "*", "\\", "（贝壳"]:
+    next(item for item in app.text_input if item.label == "搜索").set_value(probe).run()
+    if app.exception:
+        raise AssertionError(f"搜索框输入 {probe!r} 导致页面崩溃：{app.exception}")
+
+# --- N6 回归：硬约束卡片必须转义，不能把尖括号原样写进自绘 HTML ---
+# 这一步会改写账户画像，放在 resume_honesty 之前（后者会重写整份状态）。
+test_store.save_state(test_user["id"], {
+    "profile_school": "首都经济贸易大学", "profile_school_tier": "非985/211",
+    "profile_major": "<img src=x onerror=alert(1)>",
+    "profile_degree": "本科", "profile_graduation_year": 2028, "profile_available_days": 4,
+    "profile_max_months": 4, "profile_skills": "Python", "api_key": "",
+})
+app = AppTest.from_file(str(app_path), default_timeout=60).run()
+app.radio[0].set_value("智能诊断").run()
+next(item for item in app.text_area if item.label == "完整 JD").set_value(
+    # 不带「优先」二字，走「需核实」分支，说明里会原样嵌入画像里的专业名，
+    # 正好用来验证 render_constraint 有没有转义。
+    "数据分析实习生\n岗位职责：负责看板搭建。\n任职要求：法学、新闻传播相关专业。"
+)
+next(item for item in app.button if item.label == "分析这个岗位").click().run()
+if app.exception:
+    raise AssertionError(f"转义回归用例诊断报错：{app.exception}")
+constraint_html = "\n".join(item.value for item in app.markdown if '<div class="constraint">' in item.value)
+if not constraint_html:
+    raise AssertionError("没有渲染出硬约束卡片，无法验证转义")
+if "<img" in constraint_html:
+    raise AssertionError("硬约束卡片未转义，尖括号被原样写进了 DOM")
+if "&lt;img" not in constraint_html:
+    raise AssertionError(f"硬约束卡片没有按预期转义：{constraint_html[:200]}")
+
 # --- 简历已上传却一条技能都没匹配上时，不能再说「上传简历后才能匹配」 ---
 # 放在最后跑：这一步会改写账户状态，不能影响上面的断言。
 test_store.save_state(test_user["id"], {
@@ -244,5 +280,6 @@ if "没有识别到与 JD 明确对应的技能" not in page_text:
 
 print({"pages": results, "diagnosis_metrics": metric_values, "batch_import": "ok",
        "batch_dedupe": "ok", "report_export": "ok", "csv_export": "ok",
-       "role_distribution": "ok", "resume_honesty": "ok"})
+       "role_distribution": "ok", "search_metachar": "ok", "constraint_escaping": "ok",
+       "resume_honesty": "ok"})
 test_data.cleanup()

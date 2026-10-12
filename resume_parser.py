@@ -39,13 +39,28 @@ def parse_resume(uploaded_file) -> ResumeSnapshot:
     return snapshot(text)
 
 
+_MAJOR_PATTERNS = [
+    # 表格简历常见写法：学校 | 专业 | 学历
+    r"(?:大学|学院)[^\n]{0,30}[|｜]\s*([^|｜\n]{2,18})\s*[|｜]",
+    # 纯文本 / PDF 简历常见写法：「专业：经济统计学」或「专业 经济统计学」。
+    # 旧实现只认表格分隔符，没有 | 的简历一律提取不到专业。
+    r"^\s*(?:所学专业|专业|主修)\s*[：:]\s*([^\s|｜，,。；;\n]{2,18})",
+    r"^\s*(?:所学专业|专业|主修)\s+([^\s|｜，,。；;\n]{2,18})",
+]
+
+
 def snapshot(text: str) -> ResumeSnapshot:
     from radar_core import extract_skills
 
     school_match = re.search(r"([\u4e00-\u9fff]{2,20}(?:大学|学院))", text)
-    major_match = re.search(r"(?:大学|学院)[^\n]{0,30}[|｜]\s*([^|｜\n]{2,18})\s*[|｜]", text)
+    major_match = next(
+        (match for pattern in _MAJOR_PATTERNS if (match := re.search(pattern, text, re.MULTILINE))),
+        None,
+    )
     degree_match = re.search(r"本科|硕士|博士|大专", text)
-    years = [int(value) for value in re.findall(r"(20\d{2})[.年/-]", text)]
+    # 「2028届」这种写法后面没有分隔符，旧正则 (20\d{2})[.年/-] 会整条漏掉，
+    # 于是毕业年份回填不上。这里把「届」也算作合法的后接字符。
+    years = [int(value) for value in re.findall(r"(20\d{2})\s*(?:届|[.年/-])", text)]
     graduation_year = max(years) if years else None
     return ResumeSnapshot(
         text=text.strip(),
