@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Windows 批处理必须保持 CRLF，且本项目的 启动.bat 为 GBK 编码
+*.bat text eol=crlf
+*.cmd text eol=crlf
