@@ -1,49 +1,67 @@
 /* ==========================================================================
    AI 实习雷达 · 界面主题
    方向：仪表盘 / 精密仪器
-     - 近黑底 + 发丝分隔线 + 锐角（2px），不做圆角卡片堆叠
-     - 单一青色信号色（品牌），绿/琥珀/红只承担语义（结论）
+     - 石板蓝灰底（页面底 L*8.1，不压到近黑）+ 发丝分隔线 + 锐角（2px），不做圆角卡片堆叠
+     - 单一蓝色信号色（品牌），绿/琥珀/红只承担语义（结论）
      - 字体：Bahnschrift 承担数字与拉丁显示，MiSans/等线承担中文，Consolas 等宽
 
    改主题只动这个文件；app.py 只负责把本文件读进 <style>。
+   另外 .streamlit/config.toml 里有一套独立的原生主题色（接管下拉/表格/代码块），
+   两边必须同步改，否则原生组件与自绘组件的底色会不一致。
 
-   ---- 本次重做的三件事 ----
+   ---- 本次重做的四件事 ----
    1) 字号：原来散落着 9 个彼此相差不到 1px 的字号（0.72~0.92rem），
       而且 st.subheader 实际渲染成 <h3>，被写死在 0.9rem——比正文还小。
       小标题比正文小是排版硬伤，这里换成 6 级、有明确倍率的字号阶梯。
    2) 间距：原来 2/3/5/7/9/14/18/22/26px 混用，现在统一到 4px 基准的阶梯。
    3) 颜色：原 --faint(#6E7883) 在最浅的底上也只有 3.69:1，却承担着全站
       最小号的说明文字；现在文字灰全部满足 4.5:1（见下方注释里的实测值）。
+   4) 明度：整条表面阶梯原先压在 L*2.4 起，页面底近黑 → 界面读起来
+      是一整片漆黑。现在起步 L*8.1、跨度到 18.8，层次由明度承担。
    ========================================================================== */
 
 /* ===== 第 1 层：原始令牌（只描述颜色/尺寸本身，不带语义） ===== */
 :root{
-  /* 表面阶梯：深色界面靠明度拉开层次，不靠阴影 */
-  --c-900:#08090B;  /* 页面底 */
-  --c-800:#0E1013;  /* 一级面：侧栏、内嵌块 */
-  --c-700:#14171B;  /* 二级面：输入框、进度槽 */
-  --c-600:#1B1F24;  /* 三级面：标签、悬浮 */
-  --c-line:#1D2228;   /* 发丝分隔线 */
-  --c-line-strong:#2A3138; /* 需要更明确的边界时 */
+  /* 表面阶梯：深色界面靠明度拉开层次，不靠阴影。
+
+     起点定在 L*8 而不是 L*2.4——页面底压到近黑时，底/面/线全被挤在
+     L*2-12 这一小段里，眼睛看不到明度差别，看上去就是「一片漆黑」。
+     实测同类界面页面底：GitHub 5.0 / Linear 4.8 / VS Code 11.3。
+     现在跨度 8→19，层次自己就出来了，不需要靠加边框表达分组。 */
+  --c-900:#131820;  /* 页面底            L* 8.1 */
+  --c-800:#181E28;  /* 一级面：侧栏、内嵌块 L*11.1 */
+  --c-700:#1F2632;  /* 二级面：输入框、进度槽 L*15.0 */
+  --c-600:#262E3C;  /* 三级面：标签、悬浮  L*18.8 */
+  --c-line:#2A3240;   /* 发丝分隔线 */
+  --c-line-strong:#3A4454; /* 需要更明确的边界时 */
 
   /* 文字：三级灰的对比度均在 --c-600 上实测 ≥4.5:1 */
-  --c-text:#E9EDF1;   /* 16.9 : 1  正文 */
-  --c-muted:#949DA6;  /*  7.2 : 1  次要说明 */
-  --c-faint:#838C96;  /*  5.8 : 1  三级信息、单位、序号 */
+  --c-text:#E8EDF4;   /* 15.1 : 1  正文 */
+  --c-muted:#97A3B4;  /*  7.0 : 1  次要说明 */
+  --c-faint:#8E9BAD;  /*  4.8 : 1  三级信息、单位、序号（在 --c-600 上实测） */
 
-  /* 语义色：绿=通过，琥珀=需核实，红=阻断。除品牌色外不参与装饰 */
-  --c-accent:#2CB8CC;
-  --c-ok:#3FB950;
-  --c-warn:#D29922;
-  --c-bad:#EE6259;
+  /* 语义色：绿=通过，琥珀=需核实，红=阻断。除品牌色外不参与装饰。
+     信号色由青换成蓝：饱和的青（#2CB8CC）压在近黑底上像霓虹；
+     底提亮成灰蓝之后换成同源的蓝，才读得像仪表而不是灯箱。 */
+  --c-accent:#4EA3D8;
+  --c-ok:#4CC06A;
+  --c-warn:#D9A63C;
+  --c-bad:#F0736A;
 
-  /* 字号阶梯：倍率约 1.18，底 16px。中文最小不低于 13px，再小就不好认 */
-  --fs-2xl:1.5rem;      /* 24px 页面标题 */
-  --fs-xl:1.25rem;      /* 20px 次级标题 */
-  --fs-lg:1.0625rem;    /* 17px 区块标题（st.subheader） */
-  --fs-md:0.9375rem;    /* 15px 正文 */
-  --fs-sm:0.875rem;     /* 14px 说明、表格 */
-  --fs-xs:0.8125rem;    /* 13px 标签、微信息 */
+  /* 字号阶梯：倍率约 1.18。中文最小不低于 13px，再小就不好认。
+
+     ⚠️ 刻意用 px 而不是 rem：Streamlit 自己的样式表会把 html 的
+     font-size 设成 15px，而且是运行时注入的（晚于本文件），
+     html{font-size:16px} 这条根本压不住它。整条阶梯若用 rem，
+     就会被静默缩放成 0.9375 倍——正文从 15px 变 14.06px，
+     最小的 13px 变 12.19px，跌破中文可认下限；而页面看上去只是
+     "字小了点"，很难归因。用 px 就与根字号彻底解耦。 */
+  --fs-2xl:24px;      /* 页面标题 */
+  --fs-xl:20px;       /* 次级标题 */
+  --fs-lg:17px;       /* 区块标题（st.subheader） */
+  --fs-md:15px;       /* 正文 */
+  --fs-sm:14px;       /* 说明、表格 */
+  --fs-xs:13px;       /* 标签、微信息 */
 
   /* 间距阶梯：4px 基准 */
   --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px;
@@ -64,8 +82,8 @@
   --muted:var(--c-muted);
   --faint:var(--c-faint);
   --accent:var(--c-accent);
-  --accent-soft:rgba(44,184,204,.10);
-  --accent-line:rgba(44,184,204,.40);
+  --accent-soft:rgba(78,163,216,.10);
+  --accent-line:rgba(78,163,216,.40);
   --ok:var(--c-ok);
   --warn:var(--c-warn);
   --bad:var(--c-bad);
@@ -75,7 +93,13 @@
 }
 
 /* ===== 第 3 层：基础 ===== */
-html{ font-size:16px; }
+/* 这里原来写了一句 html{font-size:16px}，本意是给 rem 定基准。
+   但 Streamlit 会把 html 压成 15px，且是运行时注入（晚于本文件），
+   这条压不住，整条 rem 阶梯被静默缩成 0.9375 倍——正文 15→14.06px、
+   最小号 13→12.19px，跌破中文可认下限而极难归因。
+   所以字号全部改成 px（见第 1 层 --fs-*），这条也就删掉了。
+   若确需改根字号，唯一可靠的办法是改 .streamlit/config.toml 的
+   theme 后用 streamlit run 重启生效，而不是在 CSS 里写 html 规则。 */
 html,body,.stApp,[data-testid="stAppViewContainer"]{
   background:var(--bg); color:var(--text);
   font-family:var(--sans); font-size:var(--fs-md); line-height:1.6;
@@ -161,7 +185,7 @@ a:hover{ text-decoration:underline; }
 [data-testid="stMetricLabel"] p{ color:var(--faint) !important; font-size:var(--fs-xs) !important;
   margin-bottom:0 !important; }
 [data-testid="stMetricValue"]{ font-family:var(--display); font-variant-numeric:tabular-nums;
-  font-size:1.75rem !important; font-weight:600 !important; color:var(--text) !important;
+  font-size:28px !important; font-weight:600 !important; color:var(--text) !important;
   letter-spacing:-.01em; line-height:1.15 !important; }
 [data-testid="stMetricDelta"],[data-testid="stMetricDelta"] *{
   color:var(--faint) !important; background:transparent !important; font-size:var(--fs-xs) !important; }
@@ -176,7 +200,7 @@ a:hover{ text-decoration:underline; }
 .decision.verify::before{ background:var(--warn); }
 .decision.fail::before{ background:var(--bad); }
 .decision .label{ font-size:var(--fs-xs); color:var(--faint); }
-.decision .value{ font-size:1.375rem; font-weight:600; margin:var(--sp-1) 0 var(--sp-1); line-height:1.2; }
+.decision .value{ font-size:22px; font-weight:600; margin:var(--sp-1) 0 var(--sp-1); line-height:1.2; }
 .decision .meta{ color:var(--muted); font-size:var(--fs-sm); }
 
 /* ===== 硬约束：表格式行，靠发丝线成组 =====

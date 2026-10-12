@@ -1,13 +1,20 @@
 # AI 实习雷达 · 界面主题
 # 用 Streamlit 原生主题接管深色底，避免靠 CSS 补丁去猜组件内部结构。
 # 修改后需重启应用（streamlit run）才生效。
+#
+# ⚠️ 这里的四个色值必须与同目录 ../theme.css 的三个色层保持同步：
+#    backgroundColor         ↔ --c-900（页面底）
+#    secondaryBackgroundColor ↔ --c-800（一级面：侧栏、内嵌块）
+#    primaryColor            ↔ --c-accent（信号色）
+#    textColor               ↔ --c-text（正文）
+# 两边不一致时，原生组件（下拉、表格、代码块）与自绘组件会出现两种底色。
 
 [theme]
 base = "dark"
-primaryColor = "#4D9EFF"
-backgroundColor = "#0B0F14"
-secondaryBackgroundColor = "#111823"
-textColor = "#E6EDF3"
+primaryColor = "#4EA3D8"
+backgroundColor = "#131820"
+secondaryBackgroundColor = "#181E28"
+textColor = "#E8EDF4"
 font = "sans serif"
 
 [browser]
