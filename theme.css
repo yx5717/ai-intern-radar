@@ -343,21 +343,78 @@ a:hover{ text-decoration:underline; }
 
 [data-testid="stCode"]{ border:1px solid var(--line); border-radius:var(--r); }
 code,pre,.stCode{ font-family:var(--mono) !important; font-size:var(--fs-xs) !important; }
+/* 简历提示词 / JD 原文都是长文：canvas 之外的代码块如果不允许折行，
+   一条提示词能拉到 5000px 宽，用户必须左右拖才能读完。桌面也给折行，
+   代价只是多占几行高度，换来不用横向滚动。 */
+[data-testid="stCode"] pre,[data-testid="stCode"] code{
+  white-space:pre-wrap !important; word-break:break-word !important; overflow-wrap:anywhere !important;
+}
 [data-testid="stSegmentedControl"] button{ border-radius:0 !important; }
 [data-testid="stProgress"] > div > div{ background:var(--accent) !important; }
 
-/* ===== 窄屏 ===== */
-@media (max-width:820px){
+/* ===== 手机端 ===== */
+/* 默认隐藏卡片；窄屏反过来：卡片显示、canvas 表格隐藏。
+   表格用 key 定位（Streamlit 会把 key 渲染成 .st-key-<key> 类挂在
+   stElementContainer 上），所以两条规则各管一边，不依赖元素顺序。 */
+.jtable-mobile{ display:none; }
+
+@media (max-width:900px){
   .block-container{ padding-left:var(--sp-4); padding-right:var(--sp-4); padding-top:var(--sp-5); }
   h1{ font-size:var(--fs-xl) !important; }
   h3{ margin-top:var(--sp-5) !important; }
   .flow,.pair{ grid-template-columns:1fr; }
   .flow .step + .step,.pair .card + .card{ border-left:0; border-top:1px solid var(--line); }
   .barlist .row{ grid-template-columns:84px 1fr 28px; gap:var(--sp-2); }
-  [data-testid="stMetric"]{ padding:var(--sp-2) 2px; }
-  /* 指标竖排后，分隔线必须从竖线改成横线，否则左侧会多出一条孤立的短线 */
+
+  /* 表格 → 卡片。
+     卡片渲染在前、canvas 表格渲染在后，两者各自落在自己的 stElementContainer 里、
+     且是相邻兄弟，所以「含卡片的容器 + 它后面的表格容器」这一对可以直接定位。
+     st.dataframe 的 key 不会渲染成样式类（只有 radio/button 会），
+     所以只能靠这对相邻关系，不能靠 .st-key-XXX。 */
+  [data-testid="stElementContainer"]:has(.jtable-mobile) + [data-testid="stElementContainer"]{ display:none; }
+  .jtable-mobile{ display:block; }
+
+  /* 指标条：四个读数竖排成四条太占屏，改 2×2。
+     竖线分隔在 2×2 下会变成孤立的短横线，统一改成横线。 */
+  [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]) > div{ flex:0 0 50% !important; max-width:50% !important; }
+  [data-testid="stMetric"]{ padding:var(--sp-2) var(--sp-3) var(--sp-2) var(--sp-3); }
   [data-testid="stMetric"]::before{ left:0; right:0; top:0; bottom:auto; width:auto; height:1px; }
+
+  /* 硬约束行：结论徽标原来和约束名挤在同一行并不换行，长一点的说明会顶出屏外 */
+  .constraint .head{ flex-wrap:wrap; row-gap:var(--sp-1); }
+  .constraint .ev{ font-size:var(--fs-xs); }
+
+  /* 筛选标签：已选项多时会横向溢出，允许换行。
+     真正的容器是 stMultiSelectTagsContainer（外层 .react-aria-ComboBox>[role=group]
+     只管"标签区"与"输入框"之间的换行，标签自己排不下得让这一层 wrap）。
+
+     只加 wrap 会引入一个新问题：Streamlit 把 [role=group] 的 height/min-height/max-height
+     一起写死成 37.5px（标签区单行的高度）。标签换行后这层不跟着长，245px 的标签区
+     就从 37.5px 的盒子里溢出来，压到下一个筛选项上——13 个岗位大类默认全选时尤其明显。
+     所以这里必须把固定高度解开，让这层随内容长高。 */
+  [data-testid="stMultiSelect"] .react-aria-ComboBox > [role="group"]{
+    flex-wrap:wrap !important; row-gap:var(--sp-1) !important;
+    height:auto !important; min-height:37.5px !important; max-height:none !important; }
+  [data-testid="stMultiSelectTagsContainer"]{ flex-wrap:wrap !important; row-gap:var(--sp-1) !important; }
+  [data-testid="stMultiSelect"] input{ min-width:0 !important; }
+
+  /* 触摸目标不小于 44px */
+  .stButton button,.stFormSubmitButton button,.stDownloadButton button,
+  [data-testid="stSidebar"] [data-testid="stRadioOption"]{ min-height:44px; }
+  [data-testid="stExpander"] summary{ min-height:44px; display:flex; align-items:center; }
 }
+
+/* ===== 岗位卡片（手机端表格的替代表示） =====
+   竖排而不是表格：canvas 表格列宽写死，装不下就从字符中间切断。 */
+.jcard{ padding:var(--sp-3) 0; border-bottom:1px solid var(--line); }
+.jcard:last-child{ border-bottom:0; }
+.jcard .jt{ font-size:var(--fs-sm); font-weight:600; color:var(--text); line-height:1.45; margin-bottom:var(--sp-2); }
+.jrow{ display:flex; align-items:baseline; justify-content:space-between; gap:var(--sp-3);
+  font-size:var(--fs-xs); padding:3px 0; }
+.jrow span{ color:var(--faint); flex:none; }
+.jrow b{ color:var(--muted); font-weight:500; text-align:right; min-width:0;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.jnote{ margin-top:var(--sp-2); font-size:var(--fs-xs); color:var(--faint); line-height:1.6; }
 
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{ animation-duration:.01ms !important; transition-duration:.01ms !important; }

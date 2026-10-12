@@ -91,6 +91,35 @@ def render_barlist(pairs: list[tuple[str, int]], alt: bool = False) -> None:
     st.markdown(f'<div class="barlist{" alt" if alt else ""}">{rows}</div>', unsafe_allow_html=True)
 
 
+def job_card(title: str, fields: list[tuple[str, str]], note: str = "") -> str:
+    """一条岗位卡片：公司+岗位当标题，其余字段竖排成行。
+
+    手机端不用 canvas 表格而用卡片，原因是 canvas 表格的列宽是 px 写死的，
+    装不下时它不会加省略号，而是从字符中间切断——用户看到的会是半句话。
+    缩放表格也救不了：岗位库那 9 列最低也要约 700px，390px 的手机放不下。
+    所以窄屏是「重新排版」而不是「缩小」：同一批字段从横排改成竖排。
+    """
+    body = "".join(
+        f'<div class="jrow"><span>{_h(label)}</span><b>{_h(value)}</b></div>'
+        for label, value in fields
+    )
+    tail = f'<div class="jnote">{_h(note)}</div>' if note else ""
+    return f'<div class="jcard"><div class="jt">{_h(title)}</div>{body}{tail}</div>'
+
+
+def render_mobile_cards(cards: list[str]) -> None:
+    """把卡片列表渲染成手机端表格（.jtable-mobile，桌面下由 CSS 隐藏）。
+
+    ⚠️ 调用顺序：本函数必须写在对应的 st.dataframe **之前**。
+    narrow 屏的 CSS 用「含卡片的元素容器 + 紧邻其后的元素容器」这一对
+    来定位并隐藏 canvas 表格；cards 在后就找不到配对的那个容器了。
+    桌面端卡片是 display:none，顺序不影响观感。
+    """
+    if not cards:
+        return
+    st.markdown('<div class="jtable-mobile">' + "".join(cards) + "</div>", unsafe_allow_html=True)
+
+
 _BATCH_SEPARATOR = re.compile(r"^[ \t]*(?:-{3,}|={3,}|\*{3,}|#{3,})[ \t]*$", re.MULTILINE)
 MIN_JD_LENGTH = 30
 
@@ -676,6 +705,17 @@ if page == "求职首页":
         priority = suitable.sort_values("适配度", ascending=False).head(12).copy()
         priority["适配度"] = priority["适配度"].map(fit_cell)
         # 首页是短名单，只保留决策必需的 4 列；完整约束在“岗位库”里看。
+        # 窄屏换成卡片：canvas 表格列宽写死，390px 放不下 4 列，
+        # 会被从字符中间切断。卡片是同一批字段竖排，桌面端由 CSS 隐藏。
+        # 注意顺序：卡片必须排在表格之前，CSS 靠「卡片容器 + 相邻表格容器」
+        # 这一对来定位表格（st.dataframe 的 key 不会渲染成样式类，只能这样）。
+        render_mobile_cards([
+            job_card(
+                f"{row['公司']} · {row['岗位名称']}",
+                [("岗位大类", row["岗位大类"]), ("适配度", f"{row['适配度']}")],
+            )
+            for _, row in priority[["公司", "岗位名称", "岗位大类", "适配度"]].iterrows()
+        ])
         st.dataframe(
             priority[["公司", "岗位名称", "岗位大类", "适配度"]], width="stretch", hide_index=True,
             height=min(415, 58 + 35 * len(priority)),
@@ -936,6 +976,15 @@ elif page == "智能诊断":
                 {"#": index, "首行": item.splitlines()[0][:72], "字数": len(item)}
                 for index, item in enumerate(batch_items, 1)
             ])
+            # 首行列没有设宽度，Streamlit 会按内容最长的一条定宽（72 字 ≈ 940px），
+            # 窄屏一定溢出。窄屏改卡片：首行作为正文自然折行。
+            render_mobile_cards([
+                job_card(
+                    f"第 {index} 条",
+                    [("字数", f"{len(item)} 字"), ("首行", item.splitlines()[0][:72])],
+                )
+                for index, item in enumerate(batch_items, 1)
+            ])
             st.dataframe(preview_df, width="stretch", hide_index=True,
                          height=min(300, 58 + 35 * len(preview_df)))
         elif batch_text.strip():
@@ -969,6 +1018,20 @@ elif page == "智能诊断":
                 " · ".join(f"{name} <b>{count}</b>" for name, count in result_df["综合结论"].value_counts().items()),
                 unsafe_allow_html=True,
             )
+            # 7 列的导入结果在手机上同样装不下，窄屏改卡片竖排。
+            # 卡片在前、表格在后：窄屏靠这对相邻容器把 canvas 表格藏掉。
+            render_mobile_cards([
+                job_card(
+                    f"{row['公司']} · {row['岗位名称']}",
+                    [
+                        ("岗位大类", row["岗位大类"]),
+                        ("综合结论", row["综合结论"]),
+                        ("适配度", f"{row['适配度']}"),
+                        ("出勤 / 周期", f"{row['出勤']} / {row['周期']}"),
+                    ],
+                )
+                for _, row in result_df.iterrows()
+            ])
             st.dataframe(result_df, width="stretch", hide_index=True,
                          height=min(400, 58 + 35 * len(result_df)))
             st.caption("这些岗位已经写入岗位库，可以在“岗位库”页按结论和约束进一步筛选。")
@@ -979,6 +1042,12 @@ elif page == "岗位库":
     st.markdown(f'<div class="caption">{len(st.session_state.user_jobs)} 条已分析岗位 · 当前支持 {len(ROLE_ORDER)} 类岗位 · 仅显示{library_scope}的数据，并按最新规则与求职画像重新判断</div>', unsafe_allow_html=True)
     with st.expander(f"查看完整岗位分类（{len(ROLE_ORDER)} 类）"):
         taxonomy_df = pd.DataFrame([{"#": index, "岗位大类": family, "覆盖方向": ROLE_DESCRIPTIONS[family]} for index, family in enumerate(ROLE_ORDER, 1)])
+        # 「覆盖方向」是整句描述，canvas 表格不换行，窄屏会被切断；改卡片竖排。
+        # 卡片在前、表格在后，窄屏由 CSS 把表格藏掉（见 render_mobile_cards 注释）。
+        render_mobile_cards([
+            job_card(f"{index}. {family}", [("覆盖方向", ROLE_DESCRIPTIONS[family])])
+            for index, family in enumerate(ROLE_ORDER, 1)
+        ])
         st.dataframe(taxonomy_df, width="stretch", hide_index=True)
     with st.expander("数据概览 · 结论 / 出勤 / 周期分布"):
         if catalog_df.empty:
@@ -1054,8 +1123,24 @@ elif page == "岗位库":
             data=build_catalog_csv(list(export_frame.columns), export_frame.values.tolist()).encode("utf-8-sig"),
             file_name="ai_radar_jobs.csv", mime="text/csv",
         )
+        # 岗位库这张表 9 列共约 970px，390px 的手机装不下。窄屏改用卡片：
+        # 字段竖排，公司+岗位做标题，日期和 ID 收进卡片里，不再挤掉岗位名。
+        # 同样卡片在前、表格在后（窄屏由 CSS 成对处理）。
+        render_mobile_cards([
+            job_card(
+                f"{row['公司']} · {row['岗位名称']}",
+                [
+                    ("岗位大类", row["岗位大类"]),
+                    ("综合结论", row["综合结论"]),
+                    ("适配度", f"{row['适配度']}"),
+                    ("出勤 / 周期", f"{row['出勤']} / {row['周期']}"),
+                    ("保存时间", row["保存时间"]),
+                ],
+            )
+            for _, row in library_display[library_columns].iterrows()
+        ])
         st.dataframe(
-            library_display[library_columns], width="stretch", hide_index=True,
+            library_display[library_columns], width="stretch", hide_index=True, key="library_table",
             height=min(430, 58 + 35 * len(library_display)),
             column_config={name: st.column_config.TextColumn(width=width) for name, width in library_widths.items()},
         )
@@ -1068,6 +1153,17 @@ elif page == "岗位库":
         d1, d2, d3, d4 = st.columns(4)
         d1.metric("综合结论", selected["综合结论"]); d2.metric("适配度", fit_metric(selected["适配度"])); d3.metric("岗位大类", selected["岗位大类"]); d4.metric("保存时间", selected["保存时间"] or "未记录")
         constraint_df = pd.DataFrame(selected_analysis["constraints"])
+        # 约束表有「说明」和「证据」两个长文本列，canvas 表格不换行，
+        # 窄屏会被从中间切断。窄屏改用与「智能诊断」同一套 .constraint 卡片，
+        # 说明和证据自然折行；卡片在前、表格在后，由 CSS 成对切换。
+        render_mobile_cards([
+            f'<div class="constraint"><div class="head"><strong>{_h(row["约束"])}</strong>'
+            f'<b class="{status_class(row["结论"])}">{_h(row["结论"])}</b></div>'
+            f'<div class="note">{_h(row["说明"])}</div>'
+            + (f'<div class="ev">{_h(row["证据"])}</div>' if row["证据"] != "未发现明确证据" else "")
+            + "</div>"
+            for row in selected_analysis["constraints"]
+        ])
         st.dataframe(constraint_df, width="stretch", hide_index=True)
         st.write("**核心交付物**")
         for item in selected_analysis["deliverables"] or ["未提取到明确交付物"]:
@@ -1151,6 +1247,11 @@ else:
         st.warning("任何模型生成的简历都必须人工核验。系统明确禁止虚构经历、指标、奖项和技能。")
         st.subheader("项目版本")
         version_df = pd.DataFrame([["内部数据集", "30 条 BOSS JD", "人工复核完成"], ["外部盲测", "26 条 · 3 平台", "冻结后标注"], ["规则基线", "rule-baseline-v1", "保留原始结果"], ["网页引擎回归", "radar-core-py-v4", "26 条 · 内部回归，非盲测"], ["求职助手", "web-v8", "深色数据风界面 + 13 类岗位 + 简历自动回填 + 6 类模型接口"]], columns=["模块", "版本/规模", "状态"])
+        # 「状态」列里有整句说明，canvas 表格不换行；窄屏改卡片让文字自然折行。
+        render_mobile_cards([
+            job_card(row["模块"], [("版本 / 规模", row["版本/规模"]), ("状态", row["状态"])])
+            for _, row in version_df.iterrows()
+        ])
         st.dataframe(version_df, width="stretch", hide_index=True)
 
 sidebar_api_status.caption("模型：" + api_status_label())
