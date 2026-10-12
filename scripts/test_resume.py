@@ -15,7 +15,11 @@ class UploadedFixture:
         return self._raw
 
 
-source = Path(__file__).resolve().parents[2] / "简历" / "王嘉麟个人简历.docx"
+_RESUME_DIR = Path(__file__).resolve().parents[2] / "简历"
+_candidates = sorted(_RESUME_DIR.glob("*个人简历*.docx"))
+if not _candidates:
+    raise SystemExit(f"未在 {_RESUME_DIR} 找到 *个人简历*.docx，请先放入测试简历")
+source = _candidates[0]
 result = parse_resume(UploadedFixture(source))
 assert result.school == "首都经济贸易大学"
 assert result.major == "经济统计学"

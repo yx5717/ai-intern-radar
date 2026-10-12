@@ -32,7 +32,10 @@ with tempfile.TemporaryDirectory() as directory:
     assert app.session_state["api_key"] == ""
     assert app.session_state["user_jobs"] == []
 
-    source_resume = Path(__file__).resolve().parents[2] / "简历" / "王嘉麟个人简历.docx"
+    _resume_dir = Path(__file__).resolve().parents[2] / "简历"
+    _candidates = sorted(_resume_dir.glob("*个人简历*.docx"))
+    assert _candidates, f"未在 {_resume_dir} 找到 *个人简历*.docx，请先放入测试简历"
+    source_resume = _candidates[0]
     app.radio[0].set_value("我的资料").run()
     app.file_uploader[0].upload(
         source_resume.name,

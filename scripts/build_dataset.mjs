@@ -101,7 +101,7 @@ const info = workbook.worksheets.add("项目说明");
 const raw = workbook.worksheets.add("原始JD");
 const processed = workbook.worksheets.add("结构化岗位");
 const annotation = workbook.worksheets.add("首轮标注任务");
-workbook.comments.setSelf({ displayName: "王嘉麟" });
+workbook.comments.setSelf({ displayName: "AI Intern Radar" });
 
 const navy = "#173F5F";
 const blue = "#2878B5";
